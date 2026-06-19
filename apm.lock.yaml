@@ -1,0 +1,13 @@
+lockfile_version: '1'
+generated_at: '2026-06-19T09:39:13.286543+00:00'
+apm_version: 0.15.0
+dependencies:
+- repo_url: anthropics/skills
+  host: github.com
+  resolved_commit: 57546260929473d4e0d1c1bb75297be2fdfa1949
+  package_type: marketplace_plugin
+  deployed_files:
+  - .agents/skills/skill-creator
+  content_hash: sha256:4f6d306e750b5b4f3b0dfc0f50418fa8403b3fc99867d5c2f7c170eccf94203b
+  skill_subset:
+  - skill-creator
