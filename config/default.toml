@@ -1,0 +1,6 @@
+# default.toml — reference configuration for acpd
+listen_addr = "127.0.0.1"
+port = 4040
+pid_file = "/run/acpd/acpd.pid"
+shutdown_timeout_secs = 30
+log_level = "info"

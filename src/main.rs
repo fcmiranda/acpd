@@ -6,6 +6,9 @@ mod daemon;
 mod health;
 mod pid;
 mod signals;
+mod api;
+mod state;
+mod adapters;
 
 #[tokio::main]
 async fn main() -> Result<()> {
