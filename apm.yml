@@ -10,6 +10,9 @@ dependencies:
   - git: anthropics/skills
     skills:
     - skill-creator
+  - git: github/awesome-copilot
+    skills:
+    - create-agentsmd
   mcp: []
 includes: auto
 scripts: {}
