@@ -1,12 +1,9 @@
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::{SignalKind, signal};
 
 pub async fn signal_listener(shutdown_tx: tokio::sync::watch::Sender<bool>) {
-    let mut sigterm = signal(SignalKind::terminate())
-        .expect("failed to register SIGTERM handler");
-    let mut sigint = signal(SignalKind::interrupt())
-        .expect("failed to register SIGINT handler");
-    let mut sighup = signal(SignalKind::hangup())
-        .expect("failed to register SIGHUP handler");
+    let mut sigterm = signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
+    let mut sigint = signal(SignalKind::interrupt()).expect("failed to register SIGINT handler");
+    let mut sighup = signal(SignalKind::hangup()).expect("failed to register SIGHUP handler");
 
     tokio::select! {
         _ = sigterm.recv() => {

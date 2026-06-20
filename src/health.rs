@@ -1,8 +1,8 @@
-use axum::{routing::get, Router, Json};
+use axum::extract::State;
+use axum::{Json, Router, routing::get};
 use serde::Serialize;
 use std::sync::Arc;
 use std::time::Instant;
-use axum::extract::State;
 
 #[derive(Serialize)]
 struct HealthResponse {
@@ -10,9 +10,7 @@ struct HealthResponse {
     uptime_secs: u64,
 }
 
-async fn health_check(
-    State(start_time): State<Arc<Instant>>,
-) -> Json<HealthResponse> {
+async fn health_check(State(start_time): State<Arc<Instant>>) -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "healthy",
         uptime_secs: start_time.elapsed().as_secs(),

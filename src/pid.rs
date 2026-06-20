@@ -8,23 +8,21 @@ pub struct PidFile {
 
 impl PidFile {
     pub fn create(path: &str) -> anyhow::Result<Self> {
-        if let Ok(existing) = fs::read_to_string(path) {
-            if let Ok(pid) = existing.trim().parse::<i32>() {
-                if nix::sys::signal::kill(
-                    nix::unistd::Pid::from_raw(pid),
-                    None
-                ).is_ok() {
-                    anyhow::bail!(
-                        "daemon already running with PID {pid} (PID file: {path})"
-                    );
-                }
-                tracing::warn!("removing stale PID file for PID {pid}");
+        if let Some(pid) = fs::read_to_string(path)
+            .ok()
+            .and_then(|s| s.trim().parse::<i32>().ok())
+        {
+            if nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None).is_ok() {
+                anyhow::bail!("daemon already running with PID {pid} (PID file: {path})");
             }
+            tracing::warn!("removing stale PID file for PID {pid}");
         }
 
         let mut file = fs::File::create(path)?;
         write!(file, "{}", process::id())?;
-        Ok(PidFile { path: path.to_string() })
+        Ok(PidFile {
+            path: path.to_string(),
+        })
     }
 }
 

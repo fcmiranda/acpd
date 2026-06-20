@@ -1,25 +1,16 @@
 mod adapters;
+mod api;
+mod config;
+mod daemon;
+mod health;
+mod pid;
+mod signals;
 
-use axum::{
-    extract::State,
-    routing::post,
-    Json, Router,
-};
-use std::sync::Arc;
-use tokio::net::TcpListener;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
-use crate::adapters::{AgentUpdate, OutputAdapter, TmuxAdapter, WaybarAdapter};
-
-/// The shared state injected into our HTTP handlers.
-struct AppState {
-    adapters: Vec<Box<dyn OutputAdapter>>,
-}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // 1. Initialize logging (tracing)
-    // By default, it will show INFO level logs for our app.
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -30,44 +21,52 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Starting ACP Daemon (acpd)...");
 
-    // 2. Initialize the Output Adapters
-    let tmux_adapter = Box::new(TmuxAdapter::new());
-    let waybar_adapter = Box::new(WaybarAdapter::new());
-    
-    let shared_state = Arc::new(AppState {
-        adapters: vec![tmux_adapter, waybar_adapter],
-    });
-
-    // 3. Build the Axum Router
-    let app = Router::new()
-        // The REST fast-path for legacy scripts
-        .route("/api/status", post(handle_status))
-        // (Future) The official JSON-RPC ACP endpoint could be mapped here too
-        // .route("/rpc", post(handle_rpc))
-        .with_state(shared_state);
-
-    // 4. Start the HTTP Server on port 4040
-    let listener = TcpListener::bind("127.0.0.1:4040").await?;
-    tracing::info!("Listening for ACP events on {}", listener.local_addr()?);
-    
-    axum::serve(listener, app).await?;
-
-    Ok(())
-}
-
-/// Handler for the `/api/status` endpoint
-async fn handle_status(
-    State(state): State<Arc<AppState>>,
-    Json(payload): Json<AgentUpdate>,
-) -> Json<&'static str> {
-    tracing::info!("Received REST update: {:?}", payload);
-
-    // Broadcast the update to all registered adapters (currently just Tmux)
-    for adapter in &state.adapters {
-        if let Err(e) = adapter.update(&payload).await {
-            tracing::error!("Adapter update failed: {}", e);
+    // 2. Parse arguments and resolve config path
+    let args: Vec<String> = std::env::args().collect();
+    let mut config_path = None;
+    for i in 0..args.len() {
+        if args[i] == "--config" && i + 1 < args.len() {
+            config_path = Some(args[i + 1].clone());
+            break;
         }
     }
 
-    Json("ok")
+    let config_path = match config_path {
+        Some(path) => path,
+        None => {
+            let system_path = "/etc/acpd/config.toml";
+            let dev_path = "config/default.toml";
+            if std::path::Path::new(system_path).is_file() {
+                system_path.to_string()
+            } else if std::path::Path::new(dev_path).is_file() {
+                tracing::info!(
+                    "System config not found at {}, falling back to {}",
+                    system_path,
+                    dev_path
+                );
+                dev_path.to_string()
+            } else {
+                anyhow::bail!(
+                    "No config file found. Provide one with --config <path>, or create {}",
+                    system_path
+                );
+            }
+        }
+    };
+
+    tracing::info!("Loading config from {}", config_path);
+    let config = crate::config::Config::load(&config_path)?;
+
+    // 3. Handle PID file if configured
+    let _pid_file = if let Some(ref path) = config.pid_file {
+        tracing::info!("Creating PID file at {}", path);
+        Some(crate::pid::PidFile::create(path)?)
+    } else {
+        None
+    };
+
+    // 4. Run the daemon lifecycle
+    crate::daemon::run(config).await?;
+
+    Ok(())
 }

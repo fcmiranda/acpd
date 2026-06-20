@@ -1,16 +1,12 @@
-use axum::{
-    extract::State,
-    routing::post,
-    Router, Json,
-};
+use crate::adapters::{AgentState, AgentUpdate, OutputAdapter};
+use axum::{Json, Router, extract::State, routing::post};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use crate::adapters::OutputAdapter;
-use crate::state::AgentState;
 
 pub type ApiState = Arc<Vec<Box<dyn OutputAdapter>>>;
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct RpcRequest {
     pub jsonrpc: String,
     pub method: String,
@@ -32,8 +28,9 @@ pub struct RpcResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct StatusRequest {
-    pub agent: String,
+    pub agent: Option<String>,
     pub pane_id: String,
     pub state: String,
     pub message: Option<String>,
@@ -51,8 +48,13 @@ async fn handle_rpc(
     tracing::info!("Received RPC: {:?}", payload);
     if payload.method == "agentState/update" {
         let state = AgentState::from(payload.params.state.as_str());
+        let update = AgentUpdate {
+            pane_id: payload.params.pane_id.clone(),
+            state,
+            message: None,
+        };
         for adapter in adapters.iter() {
-            if let Err(e) = adapter.update_state(&payload.params.pane_id, &state, None).await {
+            if let Err(e) = adapter.update(&update).await {
                 tracing::error!("Adapter error: {}", e);
             }
         }
@@ -70,8 +72,13 @@ async fn handle_status(
 ) -> Json<StatusResponse> {
     tracing::info!("Received REST status: {:?}", payload);
     let state = AgentState::from(payload.state.as_str());
+    let update = AgentUpdate {
+        pane_id: payload.pane_id.clone(),
+        state,
+        message: payload.message.clone(),
+    };
     for adapter in adapters.iter() {
-        if let Err(e) = adapter.update_state(&payload.pane_id, &state, payload.message.as_deref()).await {
+        if let Err(e) = adapter.update(&update).await {
             tracing::error!("Adapter error: {}", e);
         }
     }

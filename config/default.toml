@@ -1,6 +1,26 @@
 # default.toml — reference configuration for acpd
+
 listen_addr = "127.0.0.1"
 port = 4040
-pid_file = "/run/acpd/acpd.pid"
+pid_file = "/tmp/acpd.pid"
 shutdown_timeout_secs = 30
 log_level = "info"
+
+current_spinner = "dot"
+
+[spinners]
+minidot = { interval = 83, frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] }
+line = { interval = 100, frames = ["|", "/", "-", "\\"] }
+jump = { interval = 100, frames = ["⢄", "⢂", "⢁", "⡁", "⡈", "⡐", "⡠"] }
+pulse = { interval = 125, frames = ["█", "▓", "▒", "░"] }
+points = { interval = 143, frames = ["∙∙∙", "●∙∙", "∙●∙", "∙∙●"] }
+meter = { interval = 143, frames = ["▱▱▱", "▰▱▱", "▰▰▱", "▰▰▰", "▰▰▱", "▰▱▱", "▱▱▱"] }
+hamburger = { interval = 333, frames = ["☱", "☲", "☴", "☲"] }
+ellipsis = { interval = 333, frames = ["·", "..", "...", ".."] }
+globe = { interval = 250, frames = ["🌍", "🌎", "🌏"] }
+moon = { interval = 125, frames = ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"] }
+monkey = { interval = 333, frames = ["🙈", "🙉", "🙊"] }
+arc = { interval = 150, frames = ["◜", "◠", "◝", "◞", "◡", "◟"] }
+nerd = { interval = 100, frames = [" ", " ", " ", " "] }
+nerdarc = { interval = 120, frames = ["◜", " ", "◝", "◞", "◡", "◟", " "] }
+dot = { interval = 100, frames = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"] }
