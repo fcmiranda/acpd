@@ -172,7 +172,7 @@ impl TmuxAdapter {
                 let frame = &frames[i % frames.len()];
                 let formatted = format!("#[fg={}]{} #[fg=default]", color, frame);
 
-                let _ = Command::new("tmux")
+                let out1 = Command::new("tmux")
                     .args([
                         "set-option",
                         "-w",
@@ -183,8 +183,13 @@ impl TmuxAdapter {
                     ])
                     .output()
                     .await;
+                if let Ok(o) = out1 {
+                    if !o.status.success() {
+                        tracing::warn!("Spinner set-option @ai_agent_state failed: {}", String::from_utf8_lossy(&o.stderr));
+                    }
+                }
 
-                let _ = Command::new("tmux")
+                let out2 = Command::new("tmux")
                     .args([
                         "set-option",
                         "-w",
@@ -195,11 +200,21 @@ impl TmuxAdapter {
                     ])
                     .output()
                     .await;
+                if let Ok(o) = out2 {
+                    if !o.status.success() {
+                        tracing::warn!("Spinner set-option @ai_agent_state_raw failed: {}", String::from_utf8_lossy(&o.stderr));
+                    }
+                }
 
-                let _ = Command::new("tmux")
+                let out3 = Command::new("tmux")
                     .args(["refresh-client", "-S"])
                     .output()
                     .await;
+                if let Ok(o) = out3 {
+                    if !o.status.success() {
+                        tracing::warn!("Spinner refresh-client failed: {}", String::from_utf8_lossy(&o.stderr));
+                    }
+                }
 
                 i += 1;
                 tokio::time::sleep(tokio::time::Duration::from_millis(interval)).await;
@@ -325,7 +340,7 @@ impl OutputAdapter for TmuxAdapter {
 
                 let formatted = format!("#[fg={}]{} #[fg=default]", color, icon);
 
-                let _ = Command::new("tmux")
+                let out1 = Command::new("tmux")
                     .args([
                         "set-option",
                         "-w",
@@ -336,8 +351,13 @@ impl OutputAdapter for TmuxAdapter {
                     ])
                     .output()
                     .await;
+                if let Ok(o) = out1 {
+                    if !o.status.success() {
+                        tracing::warn!("Tmux set-option @ai_agent_state failed: {}", String::from_utf8_lossy(&o.stderr));
+                    }
+                }
 
-                let _ = Command::new("tmux")
+                let out2 = Command::new("tmux")
                     .args([
                         "set-option",
                         "-w",
@@ -348,11 +368,21 @@ impl OutputAdapter for TmuxAdapter {
                     ])
                     .output()
                     .await;
+                if let Ok(o) = out2 {
+                    if !o.status.success() {
+                        tracing::warn!("Tmux set-option @ai_agent_state_raw failed: {}", String::from_utf8_lossy(&o.stderr));
+                    }
+                }
 
-                let _ = Command::new("tmux")
+                let out3 = Command::new("tmux")
                     .args(["refresh-client", "-S"])
                     .output()
                     .await;
+                if let Ok(o) = out3 {
+                    if !o.status.success() {
+                        tracing::warn!("Tmux refresh-client failed: {}", String::from_utf8_lossy(&o.stderr));
+                    }
+                }
 
                 // Trigger a bell based on state
                 let (action_msg, force_bell) = match state {

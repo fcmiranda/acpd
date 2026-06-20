@@ -14,7 +14,6 @@ RestartSec=5s
 
 # Security hardening (Relaxado para rodar na pasta do usuário)
 NoNewPrivileges=yes
-PrivateTmp=yes
 # Resource limits
 LimitNOFILE=65536
 MemoryMax=512M
