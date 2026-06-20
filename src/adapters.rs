@@ -43,6 +43,11 @@ pub trait OutputAdapter: Send + Sync {
 // ==========================================
 // WAYBAR ADAPTER
 // ==========================================
+fn get_waybar_state_path() -> String {
+    let xdg_runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
+    format!("{}/acpd-waybar-state.json", xdg_runtime)
+}
+
 pub struct WaybarAdapter {
     theme: Option<ThemeConfig>,
 }
@@ -66,7 +71,8 @@ impl OutputAdapter for WaybarAdapter {
 
         if update.state == AgentState::Idle {
             // Delete the file on idle to hide the module from waybar
-            let _ = tokio::fs::remove_file("/tmp/ai-agent-waybar-state").await;
+            let path = get_waybar_state_path();
+            let _ = tokio::fs::remove_file(&path).await;
         } else {
             let (icon, color) = if let Some(theme) = &self.theme {
                 if let Some(state_theme) = theme.states.get(raw_state) {
@@ -87,7 +93,8 @@ impl OutputAdapter for WaybarAdapter {
             
             let content = json_payload.to_string();
 
-            if let Err(e) = tokio::fs::write("/tmp/ai-agent-waybar-state", content).await {
+            let path = get_waybar_state_path();
+            if let Err(e) = tokio::fs::write(&path, content).await {
                 tracing::error!("Failed to write waybar state file: {}", e);
             }
         }

@@ -34,21 +34,28 @@ async fn main() -> anyhow::Result<()> {
     let config_path = match config_path {
         Some(path) => path,
         None => {
+            let xdg_config = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/root".into());
+                format!("{}/.config", home)
+            });
+            let user_path = format!("{}/acpd/config.toml", xdg_config);
             let system_path = "/etc/acpd/config.toml";
             let dev_path = "config/default.toml";
-            if std::path::Path::new(system_path).is_file() {
+            
+            if std::path::Path::new(&user_path).is_file() {
+                user_path
+            } else if std::path::Path::new(system_path).is_file() {
                 system_path.to_string()
             } else if std::path::Path::new(dev_path).is_file() {
                 tracing::info!(
-                    "System config not found at {}, falling back to {}",
-                    system_path,
+                    "System/User config not found, falling back to {}",
                     dev_path
                 );
                 dev_path.to_string()
             } else {
                 anyhow::bail!(
                     "No config file found. Provide one with --config <path>, or create {}",
-                    system_path
+                    user_path
                 );
             }
         }
