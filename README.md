@@ -74,21 +74,49 @@ curl -X POST http://127.0.0.1:4040/rpc \
   -d '{"jsonrpc":"2.0","method":"agentState/update","params":{"state":"working","pane_id":"%2"},"id":1}'
 ```
 
-## Deploy with systemd
+### Tmux Orchestration (RPC)
+
+`acpd` can dynamically orchestrate Tmux windows and panes via standard JSON-RPC 2.0 calls, allowing AI agents to control the terminal seamlessly.
+
+**1. Create a new Tmux window:**
+```bash
+curl -X POST http://127.0.0.1:4040/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tmux.new_window","params":{"name":"✨ Agent","command":"echo Hello && sleep 10"},"id":1}'
+```
+
+**2. Split the current pane vertically:**
+```bash
+curl -X POST http://127.0.0.1:4040/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tmux.split_pane","params":{"vertical":true,"command":"npm run dev"},"id":1}'
+```
+
+## Deploy with systemd (User Level)
+
+Instead of running globally as root, `acpd` is designed to run as a user-level background service, allowing easy development and updates without `sudo`.
 
 ```bash
-sudo install -Dm755 target/release/acpd /usr/local/bin/acpd
-sudo install -Dm644 config/default.toml /etc/acpd/config.toml
-sudo install -Dm644 systemd/acpd.service /etc/systemd/system/acpd.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now acpd
+# 1. Setup default configuration
+mkdir -p ~/.config/acpd
+cp config/default.toml ~/.config/acpd/config.toml
+
+# 2. Link the systemd service to your user configuration
+mkdir -p ~/.config/systemd/user
+ln -sf $(pwd)/systemd/acpd.service ~/.config/systemd/user/acpd.service
+
+# 3. Reload and enable the daemon on boot
+systemctl --user daemon-reload
+systemctl --user enable --now acpd
 ```
 
 View logs:
-
 ```bash
-journalctl -u acpd -f
+journalctl --user -u acpd -f
 ```
+
+**Developer Workflow:** 
+If you modify the source code, run `./scripts/update-daemon.sh`. It will automatically rebuild the release binary and restart the service in the background.
 
 ## Development
 
