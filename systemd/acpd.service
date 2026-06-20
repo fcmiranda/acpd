@@ -6,18 +6,15 @@ Wants=network-online.target
 
 [Service]
 Type=notify
-ExecStart=/usr/local/bin/acpd --config /etc/acpd/config.toml
+# Apontamos diretamente para o binário do repositório para facilitar o desenvolvimento
+ExecStart=/home/fecavmi/dev/github/acpd/target/release/acpd
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5s
 
-# Security hardening
+# Security hardening (Relaxado para rodar na pasta do usuário)
 NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=read-only
 PrivateTmp=yes
-ReadWritePaths=/run/acpd
-
 # Resource limits
 LimitNOFILE=65536
 MemoryMax=512M
@@ -31,4 +28,4 @@ StandardError=journal
 SyslogIdentifier=acpd
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
