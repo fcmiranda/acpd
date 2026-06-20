@@ -6,8 +6,28 @@ pid_file = "/tmp/acpd.pid"
 shutdown_timeout_secs = 30
 log_level = "info"
 
-current_spinner = "dot"
+[theme]
+active_spinner = "dot"
 
+[theme.states.idle]
+icon = "󱥂"
+color = "#94e2d5"
+
+[theme.states.busy]
+icon = "󰑮"
+color = "#f9e2af"
+
+[theme.states.question]
+icon = "󱜻"
+color = "#cba6f7"
+
+[theme.states.permission]
+icon = "󱅭"
+color = "#f38ba8"
+
+[theme.states.error]
+icon = "!"
+color = "#f38ba8"
 [spinners]
 minidot = { interval = 83, frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] }
 line = { interval = 100, frames = ["|", "/", "-", "\\"] }

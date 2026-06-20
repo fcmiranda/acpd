@@ -8,6 +8,19 @@ pub struct Spinner {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+pub struct AgentStateTheme {
+    pub icon: String,
+    pub color: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ThemeConfig {
+    pub active_spinner: String,
+    #[serde(default)]
+    pub states: HashMap<String, AgentStateTheme>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
 #[allow(dead_code)]
 pub struct Config {
     #[serde(default = "default_listen_addr")]
@@ -17,7 +30,7 @@ pub struct Config {
     pub pid_file: Option<String>,
     pub shutdown_timeout_secs: Option<u64>,
     pub log_level: Option<String>,
-    pub current_spinner: Option<String>,
+    pub theme: Option<ThemeConfig>,
     pub spinners: Option<HashMap<String, Spinner>>,
 }
 
@@ -42,19 +55,26 @@ mod tests {
 
     #[test]
     fn test_config_loading() {
-        let toml_content = r#"
+        let toml_content = r##"
             listen_addr = "127.0.0.1"
             port = 4040
-            current_spinner = "minidot"
+            [theme]
+            active_spinner = "minidot"
+
+            [theme.states.idle]
+            icon = "󱥂"
+            color = "#94e2d5"
 
             [spinners]
             minidot = { interval = 83, frames = ["⠋", "⠙", "⠹"] }
             line = { interval = 100, frames = ["|", "/"] }
-        "#;
+        "##;
         let config: Config = toml::from_str(toml_content).unwrap();
         assert_eq!(config.listen_addr, "127.0.0.1");
         assert_eq!(config.port, 4040);
-        assert_eq!(config.current_spinner.as_deref(), Some("minidot"));
+        let theme = config.theme.unwrap();
+        assert_eq!(theme.active_spinner, "minidot");
+        assert_eq!(theme.states.get("idle").unwrap().color, "#94e2d5");
 
         let spinners = config.spinners.unwrap();
         let minidot = spinners.get("minidot").unwrap();

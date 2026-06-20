@@ -16,12 +16,16 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
 
     let start_time = Arc::new(Instant::now());
 
-    let active_spinner = config
-        .current_spinner
+    let active_spinner_name = config
+        .theme
         .as_ref()
-        .and_then(|name| config.spinners.as_ref()?.get(name).cloned());
-
-    let active_spinner_name = config.current_spinner.clone().unwrap_or_else(|| "arc".to_string());
+        .map(|t| t.active_spinner.clone())
+        .unwrap_or_else(|| "arc".to_string());
+        
+    let active_spinner = config
+        .spinners
+        .as_ref()
+        .and_then(|spinners| spinners.get(&active_spinner_name).cloned());
     tokio::spawn(async move {
         let _ = tokio::process::Command::new("tmux")
             .args(["set", "-g", "@ai_agent_spinner", &active_spinner_name])
@@ -30,8 +34,8 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     });
 
     let adapters: crate::api::ApiState = Arc::new(vec![
-        Box::new(TmuxAdapter::new(active_spinner)),
-        Box::new(WaybarAdapter::new()),
+        Box::new(TmuxAdapter::new(config.theme.clone(), active_spinner)),
+        Box::new(WaybarAdapter::new(config.theme.clone())),
     ]);
 
     let app = axum::Router::new()

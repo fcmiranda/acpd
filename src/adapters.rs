@@ -1,4 +1,4 @@
-use crate::config::Spinner;
+use crate::config::{Spinner, ThemeConfig, AgentStateTheme};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -43,30 +43,51 @@ pub trait OutputAdapter: Send + Sync {
 // ==========================================
 // WAYBAR ADAPTER
 // ==========================================
-pub struct WaybarAdapter;
+pub struct WaybarAdapter {
+    theme: Option<ThemeConfig>,
+}
 
 impl WaybarAdapter {
-    pub fn new() -> Self {
-        Self
+    pub fn new(theme: Option<ThemeConfig>) -> Self {
+        Self { theme }
     }
 }
 
 #[async_trait]
 impl OutputAdapter for WaybarAdapter {
     async fn update(&self, update: &AgentUpdate) -> anyhow::Result<()> {
-        let raw_state = match update.state {
-            AgentState::Idle => "idle",
-            AgentState::Working => "busy",
-            AgentState::AwaitingInput => "question",
-            AgentState::Permission => "permission",
-            AgentState::Error => "error",
+        let (raw_state, tooltip) = match update.state {
+            AgentState::Idle => ("idle", "Agent Idle"),
+            AgentState::Working => ("busy", "Agent Working"),
+            AgentState::AwaitingInput => ("question", "Awaiting Input"),
+            AgentState::Permission => ("permission", "Permission Required"),
+            AgentState::Error => ("error", "Agent Error"),
         };
 
         if update.state == AgentState::Idle {
             // Delete the file on idle to hide the module from waybar
             let _ = tokio::fs::remove_file("/tmp/ai-agent-waybar-state").await;
         } else {
-            if let Err(e) = tokio::fs::write("/tmp/ai-agent-waybar-state", raw_state).await {
+            let (icon, color) = if let Some(theme) = &self.theme {
+                if let Some(state_theme) = theme.states.get(raw_state) {
+                    (state_theme.icon.clone(), state_theme.color.clone())
+                } else {
+                    ("".to_string(), "#ffffff".to_string())
+                }
+            } else {
+                ("".to_string(), "#ffffff".to_string())
+            };
+            
+            let json_payload = serde_json::json!({
+                "text": icon,
+                "tooltip": tooltip,
+                "class": raw_state,
+                "color": color
+            });
+            
+            let content = json_payload.to_string();
+
+            if let Err(e) = tokio::fs::write("/tmp/ai-agent-waybar-state", content).await {
                 tracing::error!("Failed to write waybar state file: {}", e);
             }
         }
@@ -89,14 +110,14 @@ impl OutputAdapter for WaybarAdapter {
 // TMUX ADAPTER
 // ==========================================
 pub struct TmuxAdapter {
-    // Store active spinner tasks per pane so we can cancel them
     spinners: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
     spinner_frames: Vec<String>,
     spinner_interval: u64,
+    theme: Option<ThemeConfig>,
 }
 
 impl TmuxAdapter {
-    pub fn new(active_spinner: Option<Spinner>) -> Self {
+    pub fn new(theme: Option<ThemeConfig>, active_spinner: Option<Spinner>) -> Self {
         let (frames, interval) = match active_spinner {
             Some(s) => (s.frames, s.interval),
             None => (
@@ -115,6 +136,7 @@ impl TmuxAdapter {
             spinners: Arc::new(Mutex::new(HashMap::new())),
             spinner_frames: frames,
             spinner_interval: interval,
+            theme,
         }
     }
 
@@ -131,10 +153,13 @@ impl TmuxAdapter {
         let pane_clone = pane_id.clone();
         let frames = self.spinner_frames.clone();
         let interval = self.spinner_interval;
+        let color = self.theme.as_ref()
+            .and_then(|t| t.states.get("busy"))
+            .map(|s| s.color.clone())
+            .unwrap_or_else(|| "yellow".to_string());
+
         let task = tokio::spawn(async move {
             let mut i = 0;
-            // Yellow fallback, in the future read from omarchy
-            let color = "yellow";
 
             loop {
                 let frame = &frames[i % frames.len()];
@@ -268,12 +293,26 @@ impl OutputAdapter for TmuxAdapter {
             state => {
                 self.stop_spinner(&update.pane_id).await;
 
-                // Static states
+                // Dynamic colors from theme
+                let default_theme = AgentStateTheme { icon: "?".to_string(), color: "white".to_string() };
+                
                 let (icon, color, raw) = match state {
-                    AgentState::Idle => ("󱥂", "#94e2d5", "idle"),
-                    AgentState::AwaitingInput => ("󱜻", "#cba6f7", "question"),
-                    AgentState::Permission => ("󱅭", "#f38ba8", "permission"),
-                    AgentState::Error => ("!", "red", "error"),
+                    AgentState::Idle => {
+                        let t = self.theme.as_ref().and_then(|th| th.states.get("idle")).unwrap_or(&default_theme);
+                        (t.icon.clone(), t.color.clone(), "idle")
+                    },
+                    AgentState::AwaitingInput => {
+                        let t = self.theme.as_ref().and_then(|th| th.states.get("question")).unwrap_or(&default_theme);
+                        (t.icon.clone(), t.color.clone(), "question")
+                    },
+                    AgentState::Permission => {
+                        let t = self.theme.as_ref().and_then(|th| th.states.get("permission")).unwrap_or(&default_theme);
+                        (t.icon.clone(), t.color.clone(), "permission")
+                    },
+                    AgentState::Error => {
+                        let t = self.theme.as_ref().and_then(|th| th.states.get("error")).unwrap_or(&default_theme);
+                        (t.icon.clone(), t.color.clone(), "error")
+                    },
                     _ => unreachable!(),
                 };
 
