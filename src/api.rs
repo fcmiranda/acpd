@@ -5,26 +5,68 @@ use std::sync::Arc;
 
 pub type ApiState = Arc<Vec<Box<dyn OutputAdapter>>>;
 
+use serde_json::Value;
+
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct RpcRequest {
     pub jsonrpc: String,
     pub method: String,
-    pub params: RpcParams,
+    #[serde(default)]
+    pub params: Value,
     pub id: u64,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct RpcParams {
+pub struct StateUpdateParams {
     pub state: String,
     pub pane_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SplitPaneParams {
+    pub command: Option<String>,
+    pub target_pane: Option<String>,
+    pub vertical: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NewWindowParams {
+    pub name: Option<String>,
+    pub target: Option<String>,
+    pub command: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NewSessionParams {
+    pub name: String,
+    pub directory: Option<String>,
+    pub command: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TargetParams {
+    pub target: String,
+}
+
 #[derive(Debug, Serialize)]
-pub struct RpcResponse {
-    pub jsonrpc: String,
-    pub result: String,
-    pub id: u64,
+#[serde(untagged)]
+pub enum RpcResponse {
+    Success {
+        jsonrpc: String,
+        result: Value,
+        id: u64,
+    },
+    Error {
+        jsonrpc: String,
+        error: RpcError,
+        id: u64,
+    },
+}
+
+#[derive(Debug, Serialize)]
+pub struct RpcError {
+    pub code: i32,
+    pub message: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,25 +87,142 @@ async fn handle_rpc(
     State(adapters): State<ApiState>,
     Json(payload): Json<RpcRequest>,
 ) -> Json<RpcResponse> {
-    tracing::info!("Received RPC: {:?}", payload);
-    if payload.method == "agentState/update" {
-        let state = AgentState::from(payload.params.state.as_str());
-        let update = AgentUpdate {
-            pane_id: payload.params.pane_id.clone(),
-            state,
-            message: None,
-        };
-        for adapter in adapters.iter() {
-            if let Err(e) = adapter.update(&update).await {
-                tracing::error!("Adapter error: {}", e);
+    tracing::info!("Received RPC: method={} id={}", payload.method, payload.id);
+    
+    match payload.method.as_str() {
+        "agentState/update" => {
+            match serde_json::from_value::<StateUpdateParams>(payload.params) {
+                Ok(params) => {
+                    let state = AgentState::from(params.state.as_str());
+                    let update = AgentUpdate {
+                        pane_id: params.pane_id,
+                        state,
+                        message: None,
+                    };
+                    for adapter in adapters.iter() {
+                        if let Err(e) = adapter.update(&update).await {
+                            tracing::error!("Adapter error: {}", e);
+                        }
+                    }
+                    Json(RpcResponse::Success {
+                        jsonrpc: "2.0".into(),
+                        result: serde_json::json!("ok"),
+                        id: payload.id,
+                    })
+                }
+                Err(e) => {
+                    Json(RpcResponse::Error {
+                        jsonrpc: "2.0".into(),
+                        error: RpcError { code: -32602, message: format!("Invalid params: {}", e) },
+                        id: payload.id,
+                    })
+                }
             }
         }
+        "tmux.split_pane" => {
+            match serde_json::from_value::<SplitPaneParams>(payload.params) {
+                Ok(params) => {
+                    let mut cmd = tokio::process::Command::new("tmux");
+                    cmd.arg("split-window");
+                    
+                    if params.vertical.unwrap_or(false) {
+                        cmd.arg("-h"); // tmux -h is vertical split
+                    } else {
+                        cmd.arg("-v"); // tmux -v is horizontal split
+                    }
+                    
+                    if let Some(target) = params.target_pane {
+                        cmd.arg("-t").arg(target);
+                    }
+                    
+                    if let Some(command) = params.command {
+                        cmd.arg(&command);
+                    }
+                    
+                    execute_tmux_cmd(cmd, payload.id, "pane created").await
+                }
+                Err(e) => {
+                    Json(RpcResponse::Error {
+                        jsonrpc: "2.0".into(),
+                        error: RpcError { code: -32602, message: format!("Invalid params: {}", e) },
+                        id: payload.id,
+                    })
+                }
+            }
+        }
+        "tmux.new_window" => {
+            match serde_json::from_value::<NewWindowParams>(payload.params) {
+                Ok(params) => {
+                    let mut cmd = tokio::process::Command::new("tmux");
+                    cmd.arg("new-window");
+                    if let Some(name) = params.name {
+                        cmd.arg("-n").arg(name);
+                    }
+                    if let Some(target) = params.target {
+                        cmd.arg("-t").arg(target);
+                    }
+                    if let Some(command) = params.command {
+                        cmd.arg(&command);
+                    }
+                    execute_tmux_cmd(cmd, payload.id, "window created").await
+                }
+                Err(e) => json_invalid_params(e, payload.id),
+            }
+        }
+        "tmux.new_session" => {
+            match serde_json::from_value::<NewSessionParams>(payload.params) {
+                Ok(params) => {
+                    let mut cmd = tokio::process::Command::new("tmux");
+                    cmd.arg("new-session").arg("-d").arg("-s").arg(params.name);
+                    if let Some(dir) = params.directory {
+                        cmd.arg("-c").arg(dir);
+                    }
+                    if let Some(command) = params.command {
+                        cmd.arg(&command);
+                    }
+                    execute_tmux_cmd(cmd, payload.id, "session created").await
+                }
+                Err(e) => json_invalid_params(e, payload.id),
+            }
+        }
+        "tmux.kill_pane" => {
+            match serde_json::from_value::<TargetParams>(payload.params) {
+                Ok(params) => {
+                    let mut cmd = tokio::process::Command::new("tmux");
+                    cmd.arg("kill-pane").arg("-t").arg(params.target);
+                    execute_tmux_cmd(cmd, payload.id, "pane killed").await
+                }
+                Err(e) => json_invalid_params(e, payload.id),
+            }
+        }
+        "tmux.kill_window" => {
+            match serde_json::from_value::<TargetParams>(payload.params) {
+                Ok(params) => {
+                    let mut cmd = tokio::process::Command::new("tmux");
+                    cmd.arg("kill-window").arg("-t").arg(params.target);
+                    execute_tmux_cmd(cmd, payload.id, "window killed").await
+                }
+                Err(e) => json_invalid_params(e, payload.id),
+            }
+        }
+        "tmux.kill_session" => {
+            match serde_json::from_value::<TargetParams>(payload.params) {
+                Ok(params) => {
+                    let mut cmd = tokio::process::Command::new("tmux");
+                    cmd.arg("kill-session").arg("-t").arg(params.target);
+                    execute_tmux_cmd(cmd, payload.id, "session killed").await
+                }
+                Err(e) => json_invalid_params(e, payload.id),
+            }
+        }
+        _ => {
+            Json(RpcResponse::Error {
+                jsonrpc: "2.0".into(),
+                error: RpcError { code: -32601, message: "Method not found".into() },
+                id: payload.id,
+            })
+        }
     }
-    Json(RpcResponse {
-        jsonrpc: "2.0".into(),
-        result: "ok".into(),
-        id: payload.id,
-    })
 }
 
 async fn handle_status(
@@ -90,4 +249,39 @@ pub fn api_router(adapters: ApiState) -> Router {
         .route("/rpc", post(handle_rpc))
         .route("/api/status", post(handle_status))
         .with_state(adapters)
+}
+
+async fn execute_tmux_cmd(mut cmd: tokio::process::Command, id: u64, success_msg: &str) -> Json<RpcResponse> {
+    match cmd.output().await {
+        Ok(output) if output.status.success() => {
+            Json(RpcResponse::Success {
+                jsonrpc: "2.0".into(),
+                result: serde_json::json!(success_msg),
+                id,
+            })
+        }
+        Ok(output) => {
+            let err_msg = String::from_utf8_lossy(&output.stderr);
+            Json(RpcResponse::Error {
+                jsonrpc: "2.0".into(),
+                error: RpcError { code: -32000, message: format!("Tmux error: {}", err_msg) },
+                id,
+            })
+        }
+        Err(e) => {
+            Json(RpcResponse::Error {
+                jsonrpc: "2.0".into(),
+                error: RpcError { code: -32000, message: format!("Failed to execute tmux: {}", e) },
+                id,
+            })
+        }
+    }
+}
+
+fn json_invalid_params(e: serde_json::Error, id: u64) -> Json<RpcResponse> {
+    Json(RpcResponse::Error {
+        jsonrpc: "2.0".into(),
+        error: RpcError { code: -32602, message: format!("Invalid params: {}", e) },
+        id,
+    })
 }
