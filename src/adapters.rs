@@ -14,6 +14,7 @@ pub enum AgentState {
     AwaitingInput,
     Permission,
     Error,
+    Closed,
 }
 
 impl From<&str> for AgentState {
@@ -23,6 +24,7 @@ impl From<&str> for AgentState {
             "awaiting_input" => AgentState::AwaitingInput,
             "permission" => AgentState::Permission,
             "error" => AgentState::Error,
+            "closed" => AgentState::Closed,
             _ => AgentState::Idle,
         }
     }
@@ -67,9 +69,10 @@ impl OutputAdapter for WaybarAdapter {
             AgentState::AwaitingInput => ("question", "Awaiting Input"),
             AgentState::Permission => ("permission", "Permission Required"),
             AgentState::Error => ("error", "Agent Error"),
+            AgentState::Closed => ("idle", "Agent Closed"),
         };
 
-        if update.state == AgentState::Idle {
+        if update.state == AgentState::Idle || update.state == AgentState::Closed {
             // Delete the file on idle to hide the module from waybar
             let path = get_waybar_state_path();
             let _ = tokio::fs::remove_file(&path).await;
@@ -319,6 +322,14 @@ impl OutputAdapter for TmuxAdapter {
                 let default_theme = AgentStateTheme { icon: "?".to_string(), color: "white".to_string() };
                 
                 let (icon, color, raw) = match state {
+                    AgentState::Closed => {
+                        // Clear the variables instead of setting them
+                        let _ = Command::new("tmux").args(["set-option", "-w", "-u", "-t", &update.pane_id, "@ai_agent_state"]).output().await;
+                        let _ = Command::new("tmux").args(["set-option", "-w", "-u", "-t", &update.pane_id, "@ai_agent_state_raw"]).output().await;
+                        let _ = Command::new("tmux").args(["refresh-client", "-S"]).output().await;
+                        tracing::info!("TmuxAdapter: Cleared variables for Closed state");
+                        return Ok(());
+                    },
                     AgentState::Idle => {
                         let t = self.theme.as_ref().and_then(|th| th.states.get("idle")).unwrap_or(&default_theme);
                         (t.icon.clone(), t.color.clone(), "idle")
