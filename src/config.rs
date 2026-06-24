@@ -30,6 +30,7 @@ pub struct Config {
     pub pid_file: Option<String>,
     pub shutdown_timeout_secs: Option<u64>,
     pub log_level: Option<String>,
+    pub idle_debounce_ms: Option<u64>,
     pub theme: Option<ThemeConfig>,
     pub spinners: Option<HashMap<String, Spinner>>,
 }

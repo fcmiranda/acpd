@@ -3,7 +3,12 @@ use axum::{Json, Router, extract::State, routing::post};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-pub type ApiState = Arc<Vec<Box<dyn OutputAdapter>>>;
+#[derive(Clone)]
+pub struct ApiState {
+    pub adapters: Arc<Vec<Box<dyn OutputAdapter>>>,
+    pub pending_idles: Arc<tokio::sync::Mutex<std::collections::HashMap<String, tokio::task::JoinHandle<()>>>>,
+    pub idle_debounce_ms: u64,
+}
 
 use serde_json::Value;
 
@@ -83,6 +88,44 @@ pub struct StatusResponse {
     pub success: bool,
 }
 
+async fn dispatch_update(state: &ApiState, update: AgentUpdate) {
+    if update.state == AgentState::Idle {
+        let mut pending = state.pending_idles.lock().await;
+        if let Some(task) = pending.remove(&update.pane_id) {
+            task.abort();
+        }
+        let adapters = state.adapters.clone();
+        let update_clone = update.clone();
+        let pane_id = update.pane_id.clone();
+        let pending_map = state.pending_idles.clone();
+        let delay_ms = state.idle_debounce_ms;
+        
+        let task = tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+            for adapter in adapters.iter() {
+                if let Err(e) = adapter.update(&update_clone).await {
+                    tracing::error!("Adapter error: {}", e);
+                }
+            }
+            let mut pending = pending_map.lock().await;
+            pending.remove(&pane_id);
+        });
+        pending.insert(update.pane_id.clone(), task);
+    } else {
+        {
+            let mut pending = state.pending_idles.lock().await;
+            if let Some(task) = pending.remove(&update.pane_id) {
+                task.abort();
+            }
+        }
+        for adapter in state.adapters.iter() {
+            if let Err(e) = adapter.update(&update).await {
+                tracing::error!("Adapter error: {}", e);
+            }
+        }
+    }
+}
+
 async fn handle_rpc(
     State(adapters): State<ApiState>,
     Json(payload): Json<RpcRequest>,
@@ -99,11 +142,7 @@ async fn handle_rpc(
                         state,
                         message: None,
                     };
-                    for adapter in adapters.iter() {
-                        if let Err(e) = adapter.update(&update).await {
-                            tracing::error!("Adapter error: {}", e);
-                        }
-                    }
+                    dispatch_update(&adapters, update).await;
                     Json(RpcResponse::Success {
                         jsonrpc: "2.0".into(),
                         result: serde_json::json!("ok"),
@@ -236,11 +275,7 @@ async fn handle_status(
         state,
         message: payload.message.clone(),
     };
-    for adapter in adapters.iter() {
-        if let Err(e) = adapter.update(&update).await {
-            tracing::error!("Adapter error: {}", e);
-        }
-    }
+    dispatch_update(&adapters, update).await;
     Json(StatusResponse { success: true })
 }
 
