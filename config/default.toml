@@ -8,7 +8,7 @@ log_level = "info"
 
 # Delay in milliseconds before sending the 'idle' state.
 # This debouncing prevents status icon flickering when the AI issues tool calls in rapid succession.
-idle_debounce_ms = 650
+idle_debounce_ms = 0
 
 [theme]
 active_spinner = "dot"
