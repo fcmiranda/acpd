@@ -17,15 +17,34 @@ pub enum AgentState {
     Closed,
 }
 
-impl From<&str> for AgentState {
-    fn from(s: &str) -> Self {
+impl AgentState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AgentState::Idle => "idle",
+            AgentState::Working => "working",
+            AgentState::AwaitingInput => "awaiting_input",
+            AgentState::Permission => "permission",
+            AgentState::Error => "error",
+            AgentState::Closed => "closed",
+        }
+    }
+}
+
+impl std::str::FromStr for AgentState {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "working" => AgentState::Working,
-            "awaiting_input" => AgentState::AwaitingInput,
-            "permission" => AgentState::Permission,
-            "error" => AgentState::Error,
-            "closed" => AgentState::Closed,
-            _ => AgentState::Idle,
+            "idle" => Ok(AgentState::Idle),
+            "working" => Ok(AgentState::Working),
+            "awaiting_input" => Ok(AgentState::AwaitingInput),
+            "permission" => Ok(AgentState::Permission),
+            "error" => Ok(AgentState::Error),
+            "closed" => Ok(AgentState::Closed),
+            invalid => Err(format!(
+                "Invalid agent state '{}'. Expected one of: working, idle, awaiting_input, permission, error, closed",
+                invalid
+            )),
         }
     }
 }

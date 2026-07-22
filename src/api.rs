@@ -7,6 +7,7 @@ use std::sync::Arc;
 pub struct PaneStateInfo {
     pub last_timestamp: u64,
     pub seq_id: u64,
+    pub state: AgentState,
 }
 
 #[derive(Clone)]
@@ -146,6 +147,17 @@ pub struct ListPanesParams {
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(default)]
+pub struct ListWindowsParams {
+    pub target: Option<String>,
+    pub target_session: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+pub struct ListSessionsParams {}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
 pub struct SendKeysParams {
     pub target: Option<String>,
     pub target_pane: Option<String>,
@@ -221,6 +233,7 @@ async fn dispatch_update(state: &ApiState, update: IncomingUpdate) {
             PaneStateInfo {
                 last_timestamp: update.timestamp.unwrap_or(0),
                 seq_id: seq,
+                state: update.state.clone(),
             },
         );
     }
@@ -288,30 +301,50 @@ async fn handle_rpc(
 
     match payload.method.as_str() {
         "agentState/update" => match serde_json::from_value::<StateUpdateParams>(payload.params) {
-            Ok(params) => {
-                let state = AgentState::from(params.state.as_str());
-                let update = IncomingUpdate {
-                    pane_id: params.pane_id,
-                    state,
-                    message: None,
-                    timestamp: params.timestamp,
-                };
-                dispatch_update(&adapters, update).await;
-                Json(RpcResponse::Success {
+            Ok(params) => match params.state.parse::<AgentState>() {
+                Ok(state) => {
+                    let update = IncomingUpdate {
+                        pane_id: params.pane_id,
+                        state,
+                        message: None,
+                        timestamp: params.timestamp,
+                    };
+                    dispatch_update(&adapters, update).await;
+                    Json(RpcResponse::Success {
+                        jsonrpc: "2.0".into(),
+                        result: serde_json::json!("ok"),
+                        id: payload.id,
+                    })
+                }
+                Err(err_msg) => Json(RpcResponse::Error {
                     jsonrpc: "2.0".into(),
-                    result: serde_json::json!("ok"),
+                    error: RpcError {
+                        code: -32602,
+                        message: err_msg,
+                    },
                     id: payload.id,
-                })
-            }
-            Err(e) => Json(RpcResponse::Error {
-                jsonrpc: "2.0".into(),
-                error: RpcError {
-                    code: -32602,
-                    message: format!("Invalid params: {}", e),
-                },
-                id: payload.id,
-            }),
+                }),
+            },
+            Err(e) => json_invalid_params(e, payload.id),
         },
+        "agentState/list" => {
+            let states = adapters.pane_states.lock().await;
+            let list: Vec<serde_json::Value> = states
+                .iter()
+                .map(|(pane_id, info)| {
+                    serde_json::json!({
+                        "pane_id": pane_id,
+                        "state": info.state.as_str(),
+                        "last_timestamp": info.last_timestamp,
+                    })
+                })
+                .collect();
+            Json(RpcResponse::Success {
+                jsonrpc: "2.0".into(),
+                result: serde_json::json!(list),
+                id: payload.id,
+            })
+        }
         "tmux.split_pane" => {
             match serde_json::from_value::<SplitPaneParams>(payload.params) {
                 Ok(params) => {
@@ -509,6 +542,122 @@ async fn handle_rpc(
             }
             Err(e) => json_invalid_params(e, payload.id),
         },
+        "tmux.list_windows" => match serde_json::from_value::<ListWindowsParams>(payload.params) {
+            Ok(params) => {
+                let mut cmd = tokio::process::Command::new("tmux");
+                cmd.arg("list-windows");
+                cmd.arg("-F").arg(
+                    "#{window_id}\t#{window_name}\t#{window_index}\t#{window_active}\t#{window_panes}",
+                );
+                if let Some(target) = params.target.or(params.target_session) {
+                    cmd.arg("-t").arg(target);
+                }
+                match cmd.output().await {
+                    Ok(output) if output.status.success() => {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let windows: Vec<serde_json::Value> = stdout
+                            .lines()
+                            .filter_map(|line| {
+                                let parts: Vec<&str> = line.split('\t').collect();
+                                if parts.len() >= 5 {
+                                    Some(serde_json::json!({
+                                        "window_id": parts[0],
+                                        "name": parts[1],
+                                        "index": parts[2].parse::<u32>().unwrap_or(0),
+                                        "active": parts[3] == "1",
+                                        "panes": parts[4].parse::<u32>().unwrap_or(0),
+                                    }))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        Json(RpcResponse::Success {
+                            jsonrpc: "2.0".into(),
+                            result: serde_json::json!(windows),
+                            id: payload.id,
+                        })
+                    }
+                    Ok(output) => {
+                        let err_msg = String::from_utf8_lossy(&output.stderr);
+                        Json(RpcResponse::Error {
+                            jsonrpc: "2.0".into(),
+                            error: RpcError {
+                                code: -32000,
+                                message: format!("Tmux error: {}", err_msg),
+                            },
+                            id: payload.id,
+                        })
+                    }
+                    Err(e) => Json(RpcResponse::Error {
+                        jsonrpc: "2.0".into(),
+                        error: RpcError {
+                            code: -32000,
+                            message: format!("Failed to execute tmux: {}", e),
+                        },
+                        id: payload.id,
+                    }),
+                }
+            }
+            Err(e) => json_invalid_params(e, payload.id),
+        },
+        "tmux.list_sessions" => {
+            match serde_json::from_value::<ListSessionsParams>(payload.params) {
+                Ok(_) => {
+                    let mut cmd = tokio::process::Command::new("tmux");
+                    cmd.arg("list-sessions");
+                    cmd.arg("-F").arg(
+                        "#{session_id}\t#{session_name}\t#{session_windows}\t#{session_attached}",
+                    );
+                    match cmd.output().await {
+                        Ok(output) if output.status.success() => {
+                            let stdout = String::from_utf8_lossy(&output.stdout);
+                            let sessions: Vec<serde_json::Value> = stdout
+                                .lines()
+                                .filter_map(|line| {
+                                    let parts: Vec<&str> = line.split('\t').collect();
+                                    if parts.len() >= 4 {
+                                        Some(serde_json::json!({
+                                            "session_id": parts[0],
+                                            "name": parts[1],
+                                            "windows": parts[2].parse::<u32>().unwrap_or(0),
+                                            "attached": parts[3] == "1",
+                                        }))
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+                            Json(RpcResponse::Success {
+                                jsonrpc: "2.0".into(),
+                                result: serde_json::json!(sessions),
+                                id: payload.id,
+                            })
+                        }
+                        Ok(output) => {
+                            let err_msg = String::from_utf8_lossy(&output.stderr);
+                            Json(RpcResponse::Error {
+                                jsonrpc: "2.0".into(),
+                                error: RpcError {
+                                    code: -32000,
+                                    message: format!("Tmux error: {}", err_msg),
+                                },
+                                id: payload.id,
+                            })
+                        }
+                        Err(e) => Json(RpcResponse::Error {
+                            jsonrpc: "2.0".into(),
+                            error: RpcError {
+                                code: -32000,
+                                message: format!("Failed to execute tmux: {}", e),
+                            },
+                            id: payload.id,
+                        }),
+                    }
+                }
+                Err(e) => json_invalid_params(e, payload.id),
+            }
+        }
         "tmux.send_keys" => match serde_json::from_value::<SendKeysParams>(payload.params) {
             Ok(params) => {
                 let mut cmd = tokio::process::Command::new("tmux");
@@ -540,24 +689,60 @@ async fn handle_rpc(
 async fn handle_status(
     State(adapters): State<ApiState>,
     Json(payload): Json<StatusRequest>,
-) -> Json<StatusResponse> {
+) -> Result<Json<StatusResponse>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     tracing::info!("Received REST status: {:?}", payload);
-    let state = AgentState::from(payload.state.as_str());
-    let update = IncomingUpdate {
-        pane_id: payload.pane_id.clone(),
-        state,
-        message: payload.message.clone(),
-        timestamp: payload.timestamp,
-    };
-    dispatch_update(&adapters, update).await;
-    Json(StatusResponse { success: true })
+    match payload.state.parse::<AgentState>() {
+        Ok(state) => {
+            let update = IncomingUpdate {
+                pane_id: payload.pane_id.clone(),
+                state,
+                message: payload.message.clone(),
+                timestamp: payload.timestamp,
+            };
+            dispatch_update(&adapters, update).await;
+            Ok(Json(StatusResponse { success: true }))
+        }
+        Err(err_msg) => Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "success": false,
+                "error": err_msg
+            })),
+        )),
+    }
 }
 
-pub fn api_router(adapters: ApiState) -> Router {
-    Router::new()
+pub async fn auth_middleware(
+    State(token): State<Arc<String>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, axum::http::StatusCode> {
+    let authenticated = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map_or(false, |b| b.trim() == token.as_str());
+
+    if authenticated {
+        Ok(next.run(req).await)
+    } else {
+        tracing::warn!("Unauthorized HTTP request to {}", req.uri().path());
+        Err(axum::http::StatusCode::UNAUTHORIZED)
+    }
+}
+
+pub fn api_router(adapters: ApiState, auth_token: Arc<String>) -> Router {
+    let protected = Router::new()
         .route("/rpc", post(handle_rpc))
         .route("/api/status", post(handle_status))
-        .with_state(adapters)
+        .route_layer(axum::middleware::from_fn_with_state(
+            auth_token,
+            auth_middleware,
+        ))
+        .with_state(adapters);
+
+    Router::new().merge(protected)
 }
 
 async fn execute_tmux_cmd(
@@ -729,6 +914,7 @@ mod tests {
             PaneStateInfo {
                 last_timestamp: 1000,
                 seq_id: 1,
+                state: AgentState::Working,
             },
         );
 
@@ -742,5 +928,39 @@ mod tests {
         assert_eq!(recorded.len(), 1);
         assert_eq!(recorded[0].pane_id, "%999999");
         assert_eq!(recorded[0].state, AgentState::Closed);
+    }
+
+    #[test]
+    fn test_strict_agent_state_parsing() {
+        assert_eq!("working".parse::<AgentState>(), Ok(AgentState::Working));
+        assert_eq!("idle".parse::<AgentState>(), Ok(AgentState::Idle));
+        assert_eq!(
+            "permission".parse::<AgentState>(),
+            Ok(AgentState::Permission)
+        );
+        let err = "workin".parse::<AgentState>().unwrap_err();
+        assert!(err.contains("Invalid agent state 'workin'"));
+        assert!(err.contains("Expected one of: working, idle"));
+    }
+
+    #[tokio::test]
+    async fn test_auth_middleware_header_check() {
+        let token = Arc::new("secret-token-123".to_string());
+
+        let req = axum::http::Request::builder()
+            .uri("/api/status")
+            .header("Authorization", "Bearer secret-token-123")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let auth_str = req
+            .headers()
+            .get(axum::http::header::AUTHORIZATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(auth_str, "Bearer secret-token-123");
+        let bearer = auth_str.strip_prefix("Bearer ").unwrap();
+        assert_eq!(bearer.trim(), token.as_str());
     }
 }

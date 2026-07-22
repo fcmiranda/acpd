@@ -57,9 +57,11 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         }
     });
 
+    let token = Arc::new(crate::auth::generate_and_save_token()?);
+
     let app = axum::Router::new()
         .merge(health_router(start_time))
-        .merge(api_router(adapters));
+        .merge(api_router(adapters, token));
 
     let server_handle = tokio::spawn(async move {
         axum::serve(listener, app)

@@ -1,5 +1,6 @@
 mod adapters;
 mod api;
+mod auth;
 mod config;
 mod daemon;
 mod health;
