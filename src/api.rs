@@ -70,9 +70,37 @@ pub struct NewSessionParams {
     pub command: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
 pub struct TargetParams {
     pub target: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+pub struct CapturePaneParams {
+    pub target: Option<String>,
+    pub target_pane: Option<String>,
+    pub start_line: Option<i32>,
+    pub end_line: Option<i32>,
+    pub escape_sequences: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+pub struct ListPanesParams {
+    pub target: Option<String>,
+    pub all: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+pub struct SendKeysParams {
+    pub target: Option<String>,
+    pub target_pane: Option<String>,
+    #[serde(default)]
+    pub keys: Vec<String>,
+    pub literal: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -320,6 +348,133 @@ async fn handle_rpc(
             }
             Err(e) => json_invalid_params(e, payload.id),
         },
+        "tmux.capture_pane" => match serde_json::from_value::<CapturePaneParams>(payload.params) {
+            Ok(params) => {
+                let mut cmd = tokio::process::Command::new("tmux");
+                cmd.arg("capture-pane").arg("-p");
+                if let Some(target) = params.target.or(params.target_pane) {
+                    cmd.arg("-t").arg(target);
+                }
+                if let Some(start) = params.start_line {
+                    cmd.arg("-S").arg(start.to_string());
+                }
+                if let Some(end) = params.end_line {
+                    cmd.arg("-E").arg(end.to_string());
+                }
+                if params.escape_sequences.unwrap_or(false) {
+                    cmd.arg("-e");
+                }
+                match cmd.output().await {
+                    Ok(output) if output.status.success() => {
+                        let content = String::from_utf8_lossy(&output.stdout).to_string();
+                        Json(RpcResponse::Success {
+                            jsonrpc: "2.0".into(),
+                            result: serde_json::json!({ "content": content }),
+                            id: payload.id,
+                        })
+                    }
+                    Ok(output) => {
+                        let err_msg = String::from_utf8_lossy(&output.stderr);
+                        Json(RpcResponse::Error {
+                            jsonrpc: "2.0".into(),
+                            error: RpcError {
+                                code: -32000,
+                                message: format!("Tmux error: {}", err_msg),
+                            },
+                            id: payload.id,
+                        })
+                    }
+                    Err(e) => Json(RpcResponse::Error {
+                        jsonrpc: "2.0".into(),
+                        error: RpcError {
+                            code: -32000,
+                            message: format!("Failed to execute tmux: {}", e),
+                        },
+                        id: payload.id,
+                    }),
+                }
+            }
+            Err(e) => json_invalid_params(e, payload.id),
+        },
+        "tmux.list_panes" => match serde_json::from_value::<ListPanesParams>(payload.params) {
+            Ok(params) => {
+                let mut cmd = tokio::process::Command::new("tmux");
+                cmd.arg("list-panes");
+                cmd.arg("-F").arg(
+                    "#{pane_id}\t#{pane_active}\t#{pane_width}\t#{pane_height}\t#{pane_current_path}\t#{pane_current_command}",
+                );
+                if params.all.unwrap_or(false) {
+                    cmd.arg("-a");
+                } else if let Some(target) = params.target {
+                    cmd.arg("-t").arg(target);
+                }
+                match cmd.output().await {
+                    Ok(output) if output.status.success() => {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let panes: Vec<serde_json::Value> = stdout
+                            .lines()
+                            .filter_map(|line| {
+                                let parts: Vec<&str> = line.split('\t').collect();
+                                if parts.len() >= 6 {
+                                    Some(serde_json::json!({
+                                        "pane_id": parts[0],
+                                        "active": parts[1] == "1",
+                                        "width": parts[2].parse::<u32>().unwrap_or(0),
+                                        "height": parts[3].parse::<u32>().unwrap_or(0),
+                                        "current_path": parts[4],
+                                        "current_command": parts[5],
+                                    }))
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        Json(RpcResponse::Success {
+                            jsonrpc: "2.0".into(),
+                            result: serde_json::json!(panes),
+                            id: payload.id,
+                        })
+                    }
+                    Ok(output) => {
+                        let err_msg = String::from_utf8_lossy(&output.stderr);
+                        Json(RpcResponse::Error {
+                            jsonrpc: "2.0".into(),
+                            error: RpcError {
+                                code: -32000,
+                                message: format!("Tmux error: {}", err_msg),
+                            },
+                            id: payload.id,
+                        })
+                    }
+                    Err(e) => Json(RpcResponse::Error {
+                        jsonrpc: "2.0".into(),
+                        error: RpcError {
+                            code: -32000,
+                            message: format!("Failed to execute tmux: {}", e),
+                        },
+                        id: payload.id,
+                    }),
+                }
+            }
+            Err(e) => json_invalid_params(e, payload.id),
+        },
+        "tmux.send_keys" => match serde_json::from_value::<SendKeysParams>(payload.params) {
+            Ok(params) => {
+                let mut cmd = tokio::process::Command::new("tmux");
+                cmd.arg("send-keys");
+                if let Some(target) = params.target.or(params.target_pane) {
+                    cmd.arg("-t").arg(target);
+                }
+                if params.literal.unwrap_or(false) {
+                    cmd.arg("-l");
+                }
+                for key in params.keys {
+                    cmd.arg(&key);
+                }
+                execute_tmux_cmd(cmd, payload.id, "keys sent").await
+            }
+            Err(e) => json_invalid_params(e, payload.id),
+        },
         _ => Json(RpcResponse::Error {
             jsonrpc: "2.0".into(),
             error: RpcError {
@@ -493,5 +648,19 @@ mod tests {
         let recorded = updates.lock().unwrap();
         assert_eq!(recorded.len(), 1);
         assert_eq!(recorded[0].state, AgentState::Working);
+    }
+
+    #[test]
+    fn test_rpc_param_deserialization() {
+        let capture_json = serde_json::json!({ "target_pane": "%1", "start_line": -100, "escape_sequences": true });
+        let capture_params: CapturePaneParams = serde_json::from_value(capture_json).unwrap();
+        assert_eq!(capture_params.target_pane, Some("%1".into()));
+        assert_eq!(capture_params.start_line, Some(-100));
+        assert_eq!(capture_params.escape_sequences, Some(true));
+
+        let send_keys_json = serde_json::json!({ "target": "%2", "keys": ["ls -la", "Enter"] });
+        let send_params: SendKeysParams = serde_json::from_value(send_keys_json).unwrap();
+        assert_eq!(send_params.target, Some("%2".into()));
+        assert_eq!(send_params.keys, vec!["ls -la", "Enter"]);
     }
 }
