@@ -41,6 +41,22 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         config.idle_debounce_ms.unwrap_or(650),
     );
 
+    let cleanup_state = adapters.clone();
+    let mut cleanup_shutdown_rx = shutdown_rx.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        loop {
+            tokio::select! {
+                _ = cleanup_shutdown_rx.changed() => break,
+                _ = interval.tick() => {
+                    cleanup_state.clean_stale_panes().await;
+                }
+            }
+        }
+    });
+
     let app = axum::Router::new()
         .merge(health_router(start_time))
         .merge(api_router(adapters));

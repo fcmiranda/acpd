@@ -29,6 +29,57 @@ impl ApiState {
             next_seq: Arc::new(std::sync::atomic::AtomicU64::new(1)),
         }
     }
+
+    pub async fn clean_stale_panes(&self) {
+        let registered_panes: Vec<String> = {
+            let states = self.pane_states.lock().await;
+            states.keys().cloned().collect()
+        };
+
+        if registered_panes.is_empty() {
+            return;
+        }
+
+        let output = match tokio::process::Command::new("tmux")
+            .args(["list-panes", "-a", "-F", "#{pane_id}"])
+            .output()
+            .await
+        {
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+            _ => return,
+        };
+
+        let active_panes: std::collections::HashSet<&str> = output.lines().collect();
+
+        for pane_id in registered_panes {
+            if pane_id.starts_with('%') && !active_panes.contains(pane_id.as_str()) {
+                tracing::info!("Cleaning up dead pane {}", pane_id);
+                let update = AgentUpdate {
+                    pane_id: pane_id.clone(),
+                    state: AgentState::Closed,
+                    message: Some("pane closed".into()),
+                };
+
+                {
+                    let mut pending = self.pending_idles.lock().await;
+                    if let Some(task) = pending.remove(&pane_id) {
+                        task.abort();
+                    }
+                }
+
+                for adapter in self.adapters.iter() {
+                    if let Err(e) = adapter.update(&update).await {
+                        tracing::error!("Adapter error on dead pane cleanup: {}", e);
+                    }
+                }
+
+                {
+                    let mut states = self.pane_states.lock().await;
+                    states.remove(&pane_id);
+                }
+            }
+        }
+    }
 }
 
 use serde_json::Value;
@@ -662,5 +713,34 @@ mod tests {
         let send_params: SendKeysParams = serde_json::from_value(send_keys_json).unwrap();
         assert_eq!(send_params.target, Some("%2".into()));
         assert_eq!(send_params.keys, vec!["ls -la", "Enter"]);
+    }
+
+    #[tokio::test]
+    async fn test_clean_stale_panes_removes_dead_pane() {
+        let updates = Arc::new(StdMutex::new(Vec::new()));
+        let adapter = TestAdapter {
+            updates: updates.clone(),
+        };
+        let state = ApiState::new(vec![Box::new(adapter)], 0);
+
+        // Register a fake pane %999999 that definitely doesn't exist in tmux
+        state.pane_states.lock().await.insert(
+            "%999999".into(),
+            PaneStateInfo {
+                last_timestamp: 1000,
+                seq_id: 1,
+            },
+        );
+
+        state.clean_stale_panes().await;
+
+        // Verify pane %999999 was removed from memory
+        assert!(!state.pane_states.lock().await.contains_key("%999999"));
+
+        // Verify closed update was sent to adapter
+        let recorded = updates.lock().unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].pane_id, "%999999");
+        assert_eq!(recorded[0].state, AgentState::Closed);
     }
 }
