@@ -21,7 +21,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         .as_ref()
         .map(|t| t.active_spinner.clone())
         .unwrap_or_else(|| "arc".to_string());
-        
+
     let active_spinner = config
         .spinners
         .as_ref()

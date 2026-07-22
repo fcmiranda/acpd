@@ -41,16 +41,13 @@ async fn main() -> anyhow::Result<()> {
             let user_path = format!("{}/acpd/config.toml", xdg_config);
             let system_path = "/etc/acpd/config.toml";
             let dev_path = "config/default.toml";
-            
+
             if std::path::Path::new(&user_path).is_file() {
                 user_path
             } else if std::path::Path::new(system_path).is_file() {
                 system_path.to_string()
             } else if std::path::Path::new(dev_path).is_file() {
-                tracing::info!(
-                    "System/User config not found, falling back to {}",
-                    dev_path
-                );
+                tracing::info!("System/User config not found, falling back to {}", dev_path);
                 dev_path.to_string()
             } else {
                 anyhow::bail!(

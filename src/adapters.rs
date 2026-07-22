@@ -1,4 +1,4 @@
-use crate::config::{Spinner, ThemeConfig, AgentStateTheme};
+use crate::config::{AgentStateTheme, Spinner, ThemeConfig};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -86,14 +86,14 @@ impl OutputAdapter for WaybarAdapter {
             } else {
                 ("".to_string(), "#ffffff".to_string())
             };
-            
+
             let json_payload = serde_json::json!({
                 "text": icon,
                 "tooltip": tooltip,
                 "class": raw_state,
                 "color": color
             });
-            
+
             let content = json_payload.to_string();
 
             let path = get_waybar_state_path();
@@ -163,7 +163,9 @@ impl TmuxAdapter {
         let pane_clone = pane_id.clone();
         let frames = self.spinner_frames.clone();
         let interval = self.spinner_interval;
-        let color = self.theme.as_ref()
+        let color = self
+            .theme
+            .as_ref()
             .and_then(|t| t.states.get("busy"))
             .map(|s| s.color.clone())
             .unwrap_or_else(|| "yellow".to_string());
@@ -188,7 +190,10 @@ impl TmuxAdapter {
                     .await;
                 if let Ok(o) = out1 {
                     if !o.status.success() {
-                        tracing::warn!("Spinner set-option @ai_agent_state failed: {}", String::from_utf8_lossy(&o.stderr));
+                        tracing::warn!(
+                            "Spinner set-option @ai_agent_state failed: {}",
+                            String::from_utf8_lossy(&o.stderr)
+                        );
                     }
                 }
 
@@ -205,7 +210,10 @@ impl TmuxAdapter {
                     .await;
                 if let Ok(o) = out2 {
                     if !o.status.success() {
-                        tracing::warn!("Spinner set-option @ai_agent_state_raw failed: {}", String::from_utf8_lossy(&o.stderr));
+                        tracing::warn!(
+                            "Spinner set-option @ai_agent_state_raw failed: {}",
+                            String::from_utf8_lossy(&o.stderr)
+                        );
                     }
                 }
 
@@ -215,7 +223,10 @@ impl TmuxAdapter {
                     .await;
                 if let Ok(o) = out3 {
                     if !o.status.success() {
-                        tracing::warn!("Spinner refresh-client failed: {}", String::from_utf8_lossy(&o.stderr));
+                        tracing::warn!(
+                            "Spinner refresh-client failed: {}",
+                            String::from_utf8_lossy(&o.stderr)
+                        );
                     }
                 }
 
@@ -319,33 +330,75 @@ impl OutputAdapter for TmuxAdapter {
                 self.stop_spinner(&update.pane_id).await;
 
                 // Dynamic colors from theme
-                let default_theme = AgentStateTheme { icon: "?".to_string(), color: "white".to_string() };
-                
+                let default_theme = AgentStateTheme {
+                    icon: "?".to_string(),
+                    color: "white".to_string(),
+                };
+
                 let (icon, color, raw) = match state {
                     AgentState::Closed => {
                         // Clear the variables instead of setting them
-                        let _ = Command::new("tmux").args(["set-option", "-w", "-u", "-t", &update.pane_id, "@ai_agent_state"]).output().await;
-                        let _ = Command::new("tmux").args(["set-option", "-w", "-u", "-t", &update.pane_id, "@ai_agent_state_raw"]).output().await;
-                        let _ = Command::new("tmux").args(["refresh-client", "-S"]).output().await;
+                        let _ = Command::new("tmux")
+                            .args([
+                                "set-option",
+                                "-w",
+                                "-u",
+                                "-t",
+                                &update.pane_id,
+                                "@ai_agent_state",
+                            ])
+                            .output()
+                            .await;
+                        let _ = Command::new("tmux")
+                            .args([
+                                "set-option",
+                                "-w",
+                                "-u",
+                                "-t",
+                                &update.pane_id,
+                                "@ai_agent_state_raw",
+                            ])
+                            .output()
+                            .await;
+                        let _ = Command::new("tmux")
+                            .args(["refresh-client", "-S"])
+                            .output()
+                            .await;
                         tracing::info!("TmuxAdapter: Cleared variables for Closed state");
                         return Ok(());
-                    },
+                    }
                     AgentState::Idle => {
-                        let t = self.theme.as_ref().and_then(|th| th.states.get("idle")).unwrap_or(&default_theme);
+                        let t = self
+                            .theme
+                            .as_ref()
+                            .and_then(|th| th.states.get("idle"))
+                            .unwrap_or(&default_theme);
                         (t.icon.clone(), t.color.clone(), "idle")
-                    },
+                    }
                     AgentState::AwaitingInput => {
-                        let t = self.theme.as_ref().and_then(|th| th.states.get("question")).unwrap_or(&default_theme);
+                        let t = self
+                            .theme
+                            .as_ref()
+                            .and_then(|th| th.states.get("question"))
+                            .unwrap_or(&default_theme);
                         (t.icon.clone(), t.color.clone(), "question")
-                    },
+                    }
                     AgentState::Permission => {
-                        let t = self.theme.as_ref().and_then(|th| th.states.get("permission")).unwrap_or(&default_theme);
+                        let t = self
+                            .theme
+                            .as_ref()
+                            .and_then(|th| th.states.get("permission"))
+                            .unwrap_or(&default_theme);
                         (t.icon.clone(), t.color.clone(), "permission")
-                    },
+                    }
                     AgentState::Error => {
-                        let t = self.theme.as_ref().and_then(|th| th.states.get("error")).unwrap_or(&default_theme);
+                        let t = self
+                            .theme
+                            .as_ref()
+                            .and_then(|th| th.states.get("error"))
+                            .unwrap_or(&default_theme);
                         (t.icon.clone(), t.color.clone(), "error")
-                    },
+                    }
                     _ => unreachable!(),
                 };
 
@@ -364,7 +417,10 @@ impl OutputAdapter for TmuxAdapter {
                     .await;
                 if let Ok(o) = out1 {
                     if !o.status.success() {
-                        tracing::warn!("Tmux set-option @ai_agent_state failed: {}", String::from_utf8_lossy(&o.stderr));
+                        tracing::warn!(
+                            "Tmux set-option @ai_agent_state failed: {}",
+                            String::from_utf8_lossy(&o.stderr)
+                        );
                     }
                 }
 
@@ -381,7 +437,10 @@ impl OutputAdapter for TmuxAdapter {
                     .await;
                 if let Ok(o) = out2 {
                     if !o.status.success() {
-                        tracing::warn!("Tmux set-option @ai_agent_state_raw failed: {}", String::from_utf8_lossy(&o.stderr));
+                        tracing::warn!(
+                            "Tmux set-option @ai_agent_state_raw failed: {}",
+                            String::from_utf8_lossy(&o.stderr)
+                        );
                     }
                 }
 
@@ -391,7 +450,10 @@ impl OutputAdapter for TmuxAdapter {
                     .await;
                 if let Ok(o) = out3 {
                     if !o.status.success() {
-                        tracing::warn!("Tmux refresh-client failed: {}", String::from_utf8_lossy(&o.stderr));
+                        tracing::warn!(
+                            "Tmux refresh-client failed: {}",
+                            String::from_utf8_lossy(&o.stderr)
+                        );
                     }
                 }
 
