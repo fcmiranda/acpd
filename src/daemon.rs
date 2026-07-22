@@ -33,14 +33,13 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
             .await;
     });
 
-    let adapters: crate::api::ApiState = crate::api::ApiState {
-        adapters: Arc::new(vec![
+    let adapters = crate::api::ApiState::new(
+        vec![
             Box::new(TmuxAdapter::new(config.theme.clone(), active_spinner)),
             Box::new(WaybarAdapter::new(config.theme.clone())),
-        ]),
-        pending_idles: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
-        idle_debounce_ms: config.idle_debounce_ms.unwrap_or(650),
-    };
+        ],
+        config.idle_debounce_ms.unwrap_or(650),
+    );
 
     let app = axum::Router::new()
         .merge(health_router(start_time))
