@@ -6,6 +6,11 @@ use std::path::PathBuf;
 pub fn get_token_path() -> PathBuf {
     if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
         PathBuf::from(xdg).join("acpd").join("token")
+    } else if let Ok(home) = std::env::var("HOME") {
+        PathBuf::from(home)
+            .join(".cache")
+            .join("acpd")
+            .join("token")
     } else {
         let uid = nix::unistd::getuid();
         PathBuf::from(format!("/tmp/acpd-{}", uid)).join("token")
