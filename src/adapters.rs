@@ -138,6 +138,53 @@ impl OutputAdapter for WaybarAdapter {
 // ==========================================
 // TMUX ADAPTER
 // ==========================================
+async fn set_tmux_option(pane_id: &str, option: &str, value: &str) {
+    let out = Command::new("tmux")
+        .args(["set-option", "-w", "-t", pane_id, option, value])
+        .output()
+        .await;
+    if let Ok(o) = out
+        && !o.status.success()
+    {
+        tracing::warn!(
+            "Tmux set-option {} failed: {}",
+            option,
+            String::from_utf8_lossy(&o.stderr)
+        );
+    }
+}
+
+async fn unset_tmux_option(pane_id: &str, option: &str) {
+    let out = Command::new("tmux")
+        .args(["set-option", "-w", "-u", "-t", pane_id, option])
+        .output()
+        .await;
+    if let Ok(o) = out
+        && !o.status.success()
+    {
+        tracing::warn!(
+            "Tmux unset-option {} failed: {}",
+            option,
+            String::from_utf8_lossy(&o.stderr)
+        );
+    }
+}
+
+async fn refresh_tmux_client() {
+    let out = Command::new("tmux")
+        .args(["refresh-client", "-S"])
+        .output()
+        .await;
+    if let Ok(o) = out
+        && !o.status.success()
+    {
+        tracing::warn!(
+            "Tmux refresh-client failed: {}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+    }
+}
+
 pub struct TmuxAdapter {
     spinners: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
     spinner_frames: Vec<String>,
@@ -187,67 +234,18 @@ impl TmuxAdapter {
             .as_ref()
             .and_then(|t| t.states.get("busy"))
             .map(|s| s.color.clone())
-            .unwrap_or_else(|| "yellow".to_string());
+            .unwrap_or_else(|| "#f9e2af".to_string());
 
         let task = tokio::spawn(async move {
             let mut i = 0;
 
             loop {
                 let frame = &frames[i % frames.len()];
-                let formatted = format!("#[fg={}]{} #[fg=default]", color, frame);
 
-                let out1 = Command::new("tmux")
-                    .args([
-                        "set-option",
-                        "-w",
-                        "-t",
-                        &pane_clone,
-                        "@ai_agent_state",
-                        &formatted,
-                    ])
-                    .output()
-                    .await;
-                if let Ok(o) = out1 {
-                    if !o.status.success() {
-                        tracing::warn!(
-                            "Spinner set-option @ai_agent_state failed: {}",
-                            String::from_utf8_lossy(&o.stderr)
-                        );
-                    }
-                }
-
-                let out2 = Command::new("tmux")
-                    .args([
-                        "set-option",
-                        "-w",
-                        "-t",
-                        &pane_clone,
-                        "@ai_agent_state_raw",
-                        "busy",
-                    ])
-                    .output()
-                    .await;
-                if let Ok(o) = out2 {
-                    if !o.status.success() {
-                        tracing::warn!(
-                            "Spinner set-option @ai_agent_state_raw failed: {}",
-                            String::from_utf8_lossy(&o.stderr)
-                        );
-                    }
-                }
-
-                let out3 = Command::new("tmux")
-                    .args(["refresh-client", "-S"])
-                    .output()
-                    .await;
-                if let Ok(o) = out3 {
-                    if !o.status.success() {
-                        tracing::warn!(
-                            "Spinner refresh-client failed: {}",
-                            String::from_utf8_lossy(&o.stderr)
-                        );
-                    }
-                }
+                set_tmux_option(&pane_clone, "@ai_agent_state", frame).await;
+                set_tmux_option(&pane_clone, "@ai_agent_state_raw", "busy").await;
+                set_tmux_option(&pane_clone, "@ai_agent_state_color", &color).await;
+                refresh_tmux_client().await;
 
                 i += 1;
                 tokio::time::sleep(tokio::time::Duration::from_millis(interval)).await;
@@ -357,32 +355,10 @@ impl OutputAdapter for TmuxAdapter {
                 let (icon, color, raw) = match state {
                     AgentState::Closed => {
                         // Clear the variables instead of setting them
-                        let _ = Command::new("tmux")
-                            .args([
-                                "set-option",
-                                "-w",
-                                "-u",
-                                "-t",
-                                &update.pane_id,
-                                "@ai_agent_state",
-                            ])
-                            .output()
-                            .await;
-                        let _ = Command::new("tmux")
-                            .args([
-                                "set-option",
-                                "-w",
-                                "-u",
-                                "-t",
-                                &update.pane_id,
-                                "@ai_agent_state_raw",
-                            ])
-                            .output()
-                            .await;
-                        let _ = Command::new("tmux")
-                            .args(["refresh-client", "-S"])
-                            .output()
-                            .await;
+                        unset_tmux_option(&update.pane_id, "@ai_agent_state").await;
+                        unset_tmux_option(&update.pane_id, "@ai_agent_state_raw").await;
+                        unset_tmux_option(&update.pane_id, "@ai_agent_state_color").await;
+                        refresh_tmux_client().await;
                         tracing::info!("TmuxAdapter: Cleared variables for Closed state");
                         return Ok(());
                     }
@@ -421,60 +397,10 @@ impl OutputAdapter for TmuxAdapter {
                     _ => unreachable!(),
                 };
 
-                let formatted = format!("#[fg={}]{} #[fg=default]", color, icon);
-
-                let out1 = Command::new("tmux")
-                    .args([
-                        "set-option",
-                        "-w",
-                        "-t",
-                        &update.pane_id,
-                        "@ai_agent_state",
-                        &formatted,
-                    ])
-                    .output()
-                    .await;
-                if let Ok(o) = out1 {
-                    if !o.status.success() {
-                        tracing::warn!(
-                            "Tmux set-option @ai_agent_state failed: {}",
-                            String::from_utf8_lossy(&o.stderr)
-                        );
-                    }
-                }
-
-                let out2 = Command::new("tmux")
-                    .args([
-                        "set-option",
-                        "-w",
-                        "-t",
-                        &update.pane_id,
-                        "@ai_agent_state_raw",
-                        raw,
-                    ])
-                    .output()
-                    .await;
-                if let Ok(o) = out2 {
-                    if !o.status.success() {
-                        tracing::warn!(
-                            "Tmux set-option @ai_agent_state_raw failed: {}",
-                            String::from_utf8_lossy(&o.stderr)
-                        );
-                    }
-                }
-
-                let out3 = Command::new("tmux")
-                    .args(["refresh-client", "-S"])
-                    .output()
-                    .await;
-                if let Ok(o) = out3 {
-                    if !o.status.success() {
-                        tracing::warn!(
-                            "Tmux refresh-client failed: {}",
-                            String::from_utf8_lossy(&o.stderr)
-                        );
-                    }
-                }
+                set_tmux_option(&update.pane_id, "@ai_agent_state", &icon).await;
+                set_tmux_option(&update.pane_id, "@ai_agent_state_raw", raw).await;
+                set_tmux_option(&update.pane_id, "@ai_agent_state_color", &color).await;
+                refresh_tmux_client().await;
 
                 // Trigger a bell based on state
                 let (action_msg, force_bell) = match state {
@@ -496,5 +422,61 @@ impl OutputAdapter for TmuxAdapter {
             update.state
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ThemeConfig;
+    use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn test_tmux_adapter_updates() {
+        let mut states = HashMap::new();
+        states.insert(
+            "idle".to_string(),
+            AgentStateTheme {
+                icon: "󱥂".to_string(),
+                color: "#94e2d5".to_string(),
+            },
+        );
+        states.insert(
+            "busy".to_string(),
+            AgentStateTheme {
+                icon: "󰝲".to_string(),
+                color: "#f9e2af".to_string(),
+            },
+        );
+        let theme = ThemeConfig {
+            active_spinner: "dot".to_string(),
+            states,
+        };
+        let adapter = TmuxAdapter::new(Some(theme), None);
+
+        // Test non-closed state update
+        let update_idle = AgentUpdate {
+            pane_id: "%1".to_string(),
+            state: AgentState::Idle,
+            message: None,
+        };
+        assert!(adapter.update(&update_idle).await.is_ok());
+
+        // Test closed state update
+        let update_closed = AgentUpdate {
+            pane_id: "%1".to_string(),
+            state: AgentState::Closed,
+            message: None,
+        };
+        assert!(adapter.update(&update_closed).await.is_ok());
+
+        // Test working (spinner) state update
+        let update_working = AgentUpdate {
+            pane_id: "%1".to_string(),
+            state: AgentState::Working,
+            message: None,
+        };
+        assert!(adapter.update(&update_working).await.is_ok());
+        adapter.stop_spinner("%1").await;
     }
 }

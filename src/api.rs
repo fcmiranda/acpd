@@ -48,7 +48,7 @@ impl ApiState {
             .await
         {
             Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
-            _ => return,
+            _ => String::new(),
         };
 
         let active_panes: std::collections::HashSet<&str> = output.lines().collect();
@@ -88,6 +88,7 @@ use serde_json::Value;
 
 #[derive(Debug, Deserialize)]
 pub struct RpcRequest {
+    #[allow(dead_code)]
     pub jsonrpc: String,
     pub method: String,
     #[serde(default)]
@@ -218,16 +219,16 @@ async fn dispatch_update(state: &ApiState, update: IncomingUpdate) {
 
     {
         let mut states = state.pane_states.lock().await;
-        if let Some(existing) = states.get(&update.pane_id) {
-            if matches!(update.timestamp, Some(ts) if ts < existing.last_timestamp) {
-                tracing::warn!(
-                    "Discarding stale state update for pane {}: incoming_ts {:?} < last_ts {}",
-                    update.pane_id,
-                    update.timestamp,
-                    existing.last_timestamp
-                );
-                return;
-            }
+        if let Some(existing) = states.get(&update.pane_id)
+            && matches!(update.timestamp, Some(ts) if ts < existing.last_timestamp)
+        {
+            tracing::warn!(
+                "Discarding stale state update for pane {}: incoming_ts {:?} < last_ts {}",
+                update.pane_id,
+                update.timestamp,
+                existing.last_timestamp
+            );
+            return;
         }
         states.insert(
             update.pane_id.clone(),
@@ -720,7 +721,7 @@ pub async fn auth_middleware(
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|h| h.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
-        .map_or(false, |b| b.trim() == token.as_str());
+        .is_some_and(|b| b.trim() == token.as_str());
 
     if authenticated {
         Ok(next.run(req).await)
