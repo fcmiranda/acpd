@@ -18,7 +18,7 @@ icon = "󱥂"
 color = "#94e2d5"
 
 [theme.states.busy]
-icon = "󰑮"
+icon = "󰝲"
 color = "#f9e2af"
 
 [theme.states.question]
@@ -30,7 +30,7 @@ icon = "󱅭"
 color = "#f38ba8"
 
 [theme.states.error]
-icon = "!"
+icon = "󰨄"
 color = "#f38ba8"
 [spinners]
 minidot = { interval = 83, frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] }
