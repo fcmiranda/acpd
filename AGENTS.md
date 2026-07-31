@@ -12,9 +12,11 @@
 
 The daemon exposes two HTTP interfaces:
 
-- `POST /rpc` — JSON-RPC ACP endpoint (`agentState/update`)
+- `POST /rpc` — JSON-RPC ACP & Tmux endpoint (`agentState/update`, `agentState/list`, `tmux.capture_pane`, `tmux.list_panes`, `tmux.send_keys`, `tmux.new_window`, `tmux.split_pane`, `tmux.list_windows`, `tmux.list_sessions`)
 - `POST /api/status` — convenience REST endpoint for quick integrations
 - `GET /health` and `GET /ready` — health/readiness probes
+
+Requests to protected endpoints require Bearer token authentication (token path defaults to `~/.cache/acpd/token` or `/run/acpd/token` with `0600` permissions).
 
 ## Setup Commands
 
@@ -116,7 +118,7 @@ cargo clippy -- -D warnings
 ### Conventions
 
 - Use `anyhow::Result` for fallible operations.
-- Keep modules focused: `api.rs` for HTTP routes, `daemon.rs` for lifecycle, `adapters.rs` for output sinks, `signals.rs` for signal handling.
+- Keep modules focused: `api.rs` for HTTP routes & debouncing, `daemon.rs` for lifecycle & background tasks, `adapters.rs` for output sinks (tmux border/color styling & waybar), `auth.rs` for token authentication, `signals.rs` for signal handling, `state.rs` for agent state definitions, `pid.rs` for PID file management, and `health.rs` for probes.
 - Prefer structured logging via `tracing` over `println!`.
 - Deserialize config with `serde` + `toml`.
 
@@ -219,7 +221,7 @@ Common issues:
 
 - **Port already in use:** change `port` in the config or stop the existing `acpd` process.
 - **Permission denied on PID file:** ensure `/run/acpd` is writable by the service user (systemd creates this via `RuntimeDirectory=acpd`).
-- **Tmux adapter not visible yet:** the `TmuxAdapter` currently logs state changes but does not yet execute tmux commands.
+- **Tmux adapter behavior:** `TmuxAdapter` actively executes tmux formatting commands to set pane border colors according to agent states (`working`, `idle`, `waiting`, `error`, `closed`). Panes in `closed` state or removed during 30s stale pane cleanup automatically have their state formatting cleaned up.
 
 ## Additional Notes
 

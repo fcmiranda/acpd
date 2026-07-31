@@ -12,12 +12,16 @@ AI agent  ──HTTP──▶  acpd  ──▶  Tmux / Waybar / Notifications
 
 ## Features
 
-- **ACP JSON-RPC endpoint** at `POST /rpc` (`agentState/update`)
+- **ACP JSON-RPC endpoint** at `POST /rpc` (`agentState/update`, `agentState/list`)
+- **Tmux orchestration & inspection RPC methods** (`tmux.capture_pane`, `tmux.list_panes`, `tmux.send_keys`, `tmux.new_window`, `tmux.split_pane`, `tmux.list_windows`, `tmux.list_sessions`)
+- **Local Session Token Auth** with Bearer token header / path-based authentication (`0600` permissions on session token)
+- **Tmux state color synchronization** with dynamic pane border styling based on state (`working`, `idle`, `waiting`, `error`, `closed`)
+- **Debounced idle updates & race condition protection** via sequence tracking per pane
+- **Periodic stale pane cleanup task** (prunes dead panes every 30s)
 - **Simple REST endpoint** at `POST /api/status` for custom bash/JS hooks
 - **Health and readiness probes** at `GET /health` and `GET /ready`
 - **systemd-notify integration** for `Type=notify` services
 - **Graceful shutdown** on `SIGTERM`/`SIGINT`, config reload hook on `SIGHUP`
-- **Modular output adapters** — currently includes a `TmuxAdapter` scaffold
 
 ## Quick start
 
@@ -47,7 +51,9 @@ log_level = "info"
 
 `acpd` reads the config path from the second CLI argument, defaulting to `/etc/acpd/config.toml`.
 
-## API
+## API & Authentication
+
+Protected endpoints support local session token authentication via HTTP Bearer token: `-H "Authorization: Bearer <token>"`.
 
 ### Health
 
@@ -60,37 +66,42 @@ curl http://127.0.0.1:4040/ready
 
 ```bash
 curl -X POST http://127.0.0.1:4040/api/status \
+  -H "Authorization: Bearer $(cat ~/.cache/acpd/token)" \
   -H "Content-Type: application/json" \
   -d '{"agent":"antigravity","pane_id":"%2","state":"working","message":"Needs file system access"}'
 ```
 
-Valid states: `idle`, `working`, `awaiting_input`, `error`.
+Valid states: `working`, `idle`, `waiting`, `error`, `closed`.
 
-### ACP JSON-RPC update
+### ACP JSON-RPC endpoints
 
+**1. Update Agent State (`agentState/update`):**
 ```bash
 curl -X POST http://127.0.0.1:4040/rpc \
+  -H "Authorization: Bearer $(cat ~/.cache/acpd/token)" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"agentState/update","params":{"state":"working","pane_id":"%2"},"id":1}'
 ```
 
-### Tmux Orchestration (RPC)
-
-`acpd` can dynamically orchestrate Tmux windows and panes via standard JSON-RPC 2.0 calls, allowing AI agents to control the terminal seamlessly.
-
-**1. Create a new Tmux window:**
+**2. List Active States (`agentState/list`):**
 ```bash
 curl -X POST http://127.0.0.1:4040/rpc \
+  -H "Authorization: Bearer $(cat ~/.cache/acpd/token)" \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"tmux.new_window","params":{"name":"✨ Agent","command":"echo Hello && sleep 10"},"id":1}'
+  -d '{"jsonrpc":"2.0","method":"agentState/list","params":{},"id":1}'
 ```
 
-**2. Split the current pane vertically:**
-```bash
-curl -X POST http://127.0.0.1:4040/rpc \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"tmux.split_pane","params":{"vertical":true,"command":"npm run dev"},"id":1}'
-```
+### Tmux Orchestration & Inspection (RPC)
+
+`acpd` can dynamically orchestrate Tmux windows and panes via JSON-RPC 2.0 calls:
+
+- `tmux.new_window` — Create a new Tmux window (`name`, `command`)
+- `tmux.split_pane` — Split current pane (`vertical`, `command`)
+- `tmux.list_panes` — List active panes
+- `tmux.capture_pane` — Capture pane scrollback text
+- `tmux.send_keys` — Send keystrokes to a target pane
+- `tmux.list_windows` — List active windows (includes `window_name`, `session_name`)
+- `tmux.list_sessions` — List active sessions
 
 ## Deploy with systemd (User Level)
 

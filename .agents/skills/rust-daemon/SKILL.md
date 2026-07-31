@@ -428,6 +428,99 @@ let listener = if let Some(systemd_listener) = get_systemd_socket() {
 };
 ```
 
+## Local Token Authentication
+
+When a daemon exposes an HTTP/RPC control API locally, protect endpoints using auto-generated session tokens written to a secure file with restricted permissions (`0600`):
+
+```rust
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+
+pub fn get_or_create_token(token_path: &Path) -> anyhow::Result<String> {
+    if token_path.exists() {
+        return Ok(fs::read_to_string(token_path)?.trim().to_string());
+    }
+
+    if let Some(parent) = token_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let token = format!("{:x}", rand::random::<u128>());
+    fs::write(token_path, &token)?;
+    fs::set_permissions(token_path, fs::Permissions::from_mode(0600))?;
+
+    Ok(token)
+}
+```
+
+In Axum, extract and validate the Bearer token or fallback query/path parameter:
+
+```rust
+use axum::{http::{HeaderMap, StatusCode}, middleware::Next, response::Response, extract::Request};
+
+pub async fn auth_middleware(
+    headers: HeaderMap,
+    request: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let expected_token = get_expected_token(); // From app state or environment
+    if let Some(auth_header) = headers.get("Authorization").and_then(|h| h.to_str().ok()) {
+        if let Some(token) = auth_header.strip_prefix("Bearer ") {
+            if token.trim() == expected_token {
+                return Ok(next.run(request).await);
+            }
+        }
+    }
+    Err(StatusCode::UNAUTHORIZED)
+}
+```
+
+## Periodic Background Maintenance Tasks
+
+Daemons often need to purge dead sessions, stale resources, or sync external UI surfaces periodically. Spawn a dedicated background task using Tokio timers alongside the primary runtime:
+
+```rust
+pub fn spawn_cleanup_task(
+    cleanup_interval_secs: u64,
+    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(
+            tokio::time::Duration::from_secs(cleanup_interval_secs)
+        );
+        loop {
+            tokio::select! {
+                _ = shutdown_rx.changed() => break,
+                _ = interval.tick() => {
+                    if let Err(e) = purge_stale_resources().await {
+                        tracing::error!("failed periodic cleanup task: {e}");
+                    }
+                }
+            }
+        }
+    });
+}
+```
+
+## Debounced State Updates & Race Condition Protection
+
+When external events trigger rapid state transitions (e.g. `working` -> `idle`), avoid UI flicker or out-of-order execution by attaching sequence IDs and timestamps to per-entity state mutations:
+
+```rust
+pub struct EntityState {
+    pub current_state: String,
+    pub sequence_id: u64,
+    pub last_updated: std::time::Instant,
+}
+
+// When receiving a state update:
+// 1. Increment sequence_id for the entity.
+// 2. Discard incoming updates with stale sequence_ids or timestamps.
+// 3. For 'idle' debouncing, delay state transition using tokio::spawn + tokio::time::sleep,
+//    verifying sequence_id hasn't changed before executing UI changes.
+```
+
 ## Putting it all together — main.rs
 
 Here's how all the pieces compose in `main.rs`:

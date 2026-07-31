@@ -71,7 +71,7 @@ cargo clippy -- -D warnings
 ## Code style
 
 - Use `anyhow::Result` for fallible operations.
-- Keep modules focused: `api.rs` for HTTP routes, `daemon.rs` for lifecycle, `adapters.rs` for output sinks, `signals.rs` for signal handling.
+- Keep modules focused: `api.rs` for HTTP/RPC routes & debouncing, `daemon.rs` for lifecycle & background tasks, `adapters.rs` for output sinks (tmux border/color styling & waybar), `auth.rs` for token authentication, `signals.rs` for signal handling, `state.rs` for agent state definitions, `pid.rs` for PID file management, and `health.rs` for probes.
 - Prefer structured logging via `tracing` over `println!`.
 - Deserialize config with `serde` + `toml`.
 
