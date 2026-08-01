@@ -168,6 +168,38 @@ pub struct SendKeysParams {
     pub literal: Option<bool>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+pub struct SelectWindowParams {
+    pub target: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+pub struct SelectPaneParams {
+    pub target: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+pub struct DisplayMessageParams {
+    pub message: String,
+    pub target: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+pub struct RingBellParams {
+    pub target: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+pub struct SelectLayoutParams {
+    pub layout: String,
+    pub target: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum RpcResponse {
@@ -674,6 +706,68 @@ async fn handle_rpc(
             }
             Err(e) => json_invalid_params(e, payload.id),
         },
+        "tmux.select_window" => match parse_rpc_params::<SelectWindowParams>(payload.params) {
+            Ok(params) => {
+                let mut cmd = tokio::process::Command::new("tmux");
+                cmd.arg("select-window");
+                if let Some(target) = params.target {
+                    cmd.arg("-t").arg(target);
+                }
+                execute_tmux_cmd(cmd, payload.id, "window selected").await
+            }
+            Err(e) => json_invalid_params(e, payload.id),
+        },
+        "tmux.select_pane" => match parse_rpc_params::<SelectPaneParams>(payload.params) {
+            Ok(params) => {
+                let mut cmd = tokio::process::Command::new("tmux");
+                cmd.arg("select-pane");
+                if let Some(target) = params.target {
+                    cmd.arg("-t").arg(target);
+                }
+                execute_tmux_cmd(cmd, payload.id, "pane selected").await
+            }
+            Err(e) => json_invalid_params(e, payload.id),
+        },
+        "tmux.display_message" => {
+            match serde_json::from_value::<DisplayMessageParams>(payload.params) {
+                Ok(params) => {
+                    let mut cmd = tokio::process::Command::new("tmux");
+                    cmd.arg("display-message");
+                    if let Some(target) = params.target {
+                        cmd.arg("-t").arg(target);
+                    }
+                    cmd.arg(params.message);
+                    execute_tmux_cmd(cmd, payload.id, "message displayed").await
+                }
+                Err(e) => json_invalid_params(e, payload.id),
+            }
+        }
+        "tmux.ring_bell" => match parse_rpc_params::<RingBellParams>(payload.params) {
+            Ok(params) => {
+                let mut cmd = tokio::process::Command::new("tmux");
+                cmd.arg("send-keys");
+                if let Some(target) = params.target {
+                    cmd.arg("-t").arg(target);
+                }
+                cmd.arg("C-g");
+                execute_tmux_cmd(cmd, payload.id, "bell triggered").await
+            }
+            Err(e) => json_invalid_params(e, payload.id),
+        },
+        "tmux.select_layout" => {
+            match serde_json::from_value::<SelectLayoutParams>(payload.params) {
+                Ok(params) => {
+                    let mut cmd = tokio::process::Command::new("tmux");
+                    cmd.arg("select-layout");
+                    if let Some(target) = params.target {
+                        cmd.arg("-t").arg(target);
+                    }
+                    cmd.arg(params.layout);
+                    execute_tmux_cmd(cmd, payload.id, "layout applied").await
+                }
+                Err(e) => json_invalid_params(e, payload.id),
+            }
+        }
         _ => Json(RpcResponse::Error {
             jsonrpc: "2.0".into(),
             error: RpcError {
@@ -907,6 +1001,28 @@ mod tests {
         let send_params: SendKeysParams = serde_json::from_value(send_keys_json).unwrap();
         assert_eq!(send_params.target, Some("%2".into()));
         assert_eq!(send_params.keys, vec!["ls -la", "Enter"]);
+
+        let select_win_json = serde_json::json!({ "target": "@1" });
+        let select_win_params: SelectWindowParams = serde_json::from_value(select_win_json).unwrap();
+        assert_eq!(select_win_params.target, Some("@1".into()));
+
+        let select_pane_json = serde_json::json!({ "target": "%1" });
+        let select_pane_params: SelectPaneParams = serde_json::from_value(select_pane_json).unwrap();
+        assert_eq!(select_pane_params.target, Some("%1".into()));
+
+        let display_msg_json = serde_json::json!({ "message": "Hello", "target": "@0" });
+        let display_msg_params: DisplayMessageParams = serde_json::from_value(display_msg_json).unwrap();
+        assert_eq!(display_msg_params.message, "Hello");
+        assert_eq!(display_msg_params.target, Some("@0".into()));
+
+        let ring_bell_json = serde_json::json!({ "target": "%0" });
+        let ring_bell_params: RingBellParams = serde_json::from_value(ring_bell_json).unwrap();
+        assert_eq!(ring_bell_params.target, Some("%0".into()));
+
+        let layout_json = serde_json::json!({ "layout": "even-horizontal", "target": "@0" });
+        let layout_params: SelectLayoutParams = serde_json::from_value(layout_json).unwrap();
+        assert_eq!(layout_params.layout, "even-horizontal");
+        assert_eq!(layout_params.target, Some("@0".into()));
     }
 
     #[tokio::test]
