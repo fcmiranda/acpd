@@ -187,6 +187,8 @@ async fn refresh_tmux_client() {
 
 pub struct TmuxAdapter {
     spinners: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
+    pending_idles: Arc<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
+    pane_states: Arc<Mutex<HashMap<String, AgentState>>>,
     spinner_frames: Vec<String>,
     spinner_interval: u64,
     theme: Option<ThemeConfig>,
@@ -195,21 +197,13 @@ pub struct TmuxAdapter {
 impl TmuxAdapter {
     pub fn new(theme: Option<ThemeConfig>, active_spinner: Option<Spinner>) -> Self {
         let (frames, interval) = match active_spinner {
-            Some(s) => (s.frames, s.interval),
-            None => (
-                vec![
-                    "◜".to_string(),
-                    "◠".to_string(),
-                    "◝".to_string(),
-                    "◞".to_string(),
-                    "◡".to_string(),
-                    "◟".to_string(),
-                ],
-                150,
-            ),
+            Some(s) if !s.frames.is_empty() => (s.frames, s.interval),
+            _ => (vec![], 0),
         };
         Self {
             spinners: Arc::new(Mutex::new(HashMap::new())),
+            pending_idles: Arc::new(Mutex::new(HashMap::new())),
+            pane_states: Arc::new(Mutex::new(HashMap::new())),
             spinner_frames: frames,
             spinner_interval: interval,
             theme,
@@ -229,14 +223,30 @@ impl TmuxAdapter {
         let pane_clone = pane_id.clone();
         let frames = self.spinner_frames.clone();
         let interval = self.spinner_interval;
-        let color = self
+        let (icon, color) = self
             .theme
             .as_ref()
             .and_then(|t| t.states.get("busy"))
-            .map(|s| s.color.clone())
-            .unwrap_or_else(|| "#f9e2af".to_string());
+            .map(|s| (s.icon.clone(), s.color.clone()))
+            .unwrap_or_else(|| ("󰑮".to_string(), "#f9e2af".to_string()));
 
         let task = tokio::spawn(async move {
+            if frames.is_empty() {
+                set_tmux_option(&pane_clone, "@ai_agent_state", &icon).await;
+                set_tmux_option(&pane_clone, "@ai_agent_state_raw", "busy").await;
+                set_tmux_option(&pane_clone, "@ai_agent_state_color", &color).await;
+                refresh_tmux_client().await;
+                return;
+            }
+
+            if frames.len() == 1 {
+                set_tmux_option(&pane_clone, "@ai_agent_state", &frames[0]).await;
+                set_tmux_option(&pane_clone, "@ai_agent_state_raw", "busy").await;
+                set_tmux_option(&pane_clone, "@ai_agent_state_color", &color).await;
+                refresh_tmux_client().await;
+                return;
+            }
+
             let mut i = 0;
 
             loop {
@@ -339,6 +349,79 @@ impl TmuxAdapter {
 #[async_trait]
 impl OutputAdapter for TmuxAdapter {
     async fn update(&self, update: &AgentUpdate) -> anyhow::Result<()> {
+        // Cancel any pending idle debounce task for this pane
+        {
+            let mut pending = self.pending_idles.lock().await;
+            if let Some(task) = pending.remove(&update.pane_id) {
+                task.abort();
+            }
+        }
+
+        // Debounce Idle state to prevent rapid flickering during tool call chains
+        if update.state == AgentState::Idle {
+            let pane_states = Arc::clone(&self.pane_states);
+            let spinners = Arc::clone(&self.spinners);
+            let theme = self.theme.clone();
+            let pane_id = update.pane_id.clone();
+
+            let task = tokio::spawn(async move {
+                tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
+
+                // Check deduplication
+                {
+                    let mut states = pane_states.lock().await;
+                    if let Some(prev) = states.get(&pane_id) {
+                        if prev == &AgentState::Idle {
+                            return;
+                        }
+                    }
+                    states.insert(pane_id.clone(), AgentState::Idle);
+                }
+
+                // Stop any running spinner
+                {
+                    let mut sp = spinners.lock().await;
+                    if let Some(t) = sp.remove(&pane_id) {
+                        t.abort();
+                    }
+                }
+
+                let default_theme = AgentStateTheme {
+                    icon: "?".to_string(),
+                    color: "white".to_string(),
+                };
+                let t = theme
+                    .as_ref()
+                    .and_then(|th| th.states.get("idle"))
+                    .unwrap_or(&default_theme);
+
+                set_tmux_option(&pane_id, "@ai_agent_state", &t.icon).await;
+                set_tmux_option(&pane_id, "@ai_agent_state_raw", "idle").await;
+                set_tmux_option(&pane_id, "@ai_agent_state_color", &t.color).await;
+                refresh_tmux_client().await;
+
+                tracing::info!("TmuxAdapter: Debounced update pane {} to Idle", pane_id);
+            });
+
+            self.pending_idles.lock().await.insert(update.pane_id.clone(), task);
+            return Ok(());
+        }
+
+        // State deduplication: ignore redundant updates for the same state on the same pane
+        {
+            let mut states = self.pane_states.lock().await;
+            if let Some(prev) = states.get(&update.pane_id) {
+                if prev == &update.state {
+                    return Ok(());
+                }
+            }
+            if update.state == AgentState::Closed {
+                states.remove(&update.pane_id);
+            } else {
+                states.insert(update.pane_id.clone(), update.state.clone());
+            }
+        }
+
         match &update.state {
             AgentState::Working => {
                 self.start_spinner(update.pane_id.clone()).await;
@@ -362,14 +445,7 @@ impl OutputAdapter for TmuxAdapter {
                         tracing::info!("TmuxAdapter: Cleared variables for Closed state");
                         return Ok(());
                     }
-                    AgentState::Idle => {
-                        let t = self
-                            .theme
-                            .as_ref()
-                            .and_then(|th| th.states.get("idle"))
-                            .unwrap_or(&default_theme);
-                        (t.icon.clone(), t.color.clone(), "idle")
-                    }
+                    AgentState::Idle => unreachable!(),
                     AgentState::AwaitingInput => {
                         let t = self
                             .theme
@@ -404,7 +480,6 @@ impl OutputAdapter for TmuxAdapter {
 
                 // Trigger a bell based on state
                 let (action_msg, force_bell) = match state {
-                    AgentState::Idle => (Some("󱥂 finished"), false),
                     AgentState::AwaitingInput => (Some("󱜻 question"), true),
                     AgentState::Permission => (Some("󱅭 permission"), true),
                     _ => (None, false),
