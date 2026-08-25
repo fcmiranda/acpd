@@ -528,6 +528,17 @@ impl SoundAdapter {
     fn resolve_sound_path(&self, event_type: &str) -> Option<String> {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/home/fecavmi".to_string());
 
+        // Check explicit mute marker files
+        let mute_markers = [
+            format!("{}/.config/omarchy/sounds/muted", home),
+            format!("{}/.config/acpd/sounds/muted", home),
+        ];
+        for marker in &mute_markers {
+            if std::path::Path::new(marker).exists() {
+                return None;
+            }
+        }
+
         // 1. Check runtime state pointer files first (allows instant hot-switching without restart)
         let state_pointers = [
             format!("{}/.config/omarchy/sounds/ai-{}.sound", home, event_type),
@@ -539,6 +550,14 @@ impl SoundAdapter {
         for pointer in &state_pointers {
             if let Ok(content) = std::fs::read_to_string(pointer) {
                 let trimmed = content.trim();
+                // Explicitly muted or disabled
+                if trimmed.eq_ignore_ascii_case("none")
+                    || trimmed.eq_ignore_ascii_case("off")
+                    || trimmed.eq_ignore_ascii_case("disabled")
+                    || trimmed.eq_ignore_ascii_case("muted")
+                {
+                    return None;
+                }
                 if !trimmed.is_empty() {
                     let expanded = Self::expand_home(trimmed);
                     if std::path::Path::new(&expanded).is_file() {
