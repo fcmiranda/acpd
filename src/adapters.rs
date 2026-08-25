@@ -1,4 +1,4 @@
-use crate::config::{AgentStateTheme, Spinner, ThemeConfig};
+use crate::config::{AgentStateTheme, SoundConfig, Spinner, ThemeConfig};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -500,6 +500,186 @@ impl OutputAdapter for TmuxAdapter {
     }
 }
 
+// ==========================================
+// SOUND ADAPTER
+// ==========================================
+pub struct SoundAdapter {
+    config: Option<SoundConfig>,
+    pane_states: Arc<Mutex<HashMap<String, AgentState>>>,
+}
+
+impl SoundAdapter {
+    pub fn new(config: Option<SoundConfig>) -> Self {
+        Self {
+            config,
+            pane_states: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn expand_home(path: &str) -> String {
+        if path.starts_with("~/") {
+            if let Ok(home) = std::env::var("HOME") {
+                return format!("{}{}", home, &path[1..]);
+            }
+        }
+        path.to_string()
+    }
+
+    fn resolve_sound_path(&self, event_type: &str) -> Option<String> {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/fecavmi".to_string());
+
+        // 1. Check runtime state pointer files first (allows instant hot-switching without restart)
+        let state_pointers = [
+            format!("{}/.config/omarchy/sounds/ai-{}.sound", home, event_type),
+            format!("{}/.config/acpd/sounds/{}.sound", home, event_type),
+            format!("{}/.config/omarchy/sounds/ai-response.sound", home),
+            format!("{}/.config/acpd/sounds/response.sound", home),
+        ];
+
+        for pointer in &state_pointers {
+            if let Ok(content) = std::fs::read_to_string(pointer) {
+                let trimmed = content.trim();
+                if !trimmed.is_empty() {
+                    let expanded = Self::expand_home(trimmed);
+                    if std::path::Path::new(&expanded).is_file() {
+                        return Some(expanded);
+                    }
+                }
+            }
+        }
+
+        // 2. Check direct symlinks/files in user config
+        let direct_files = [
+            format!("{}/.config/omarchy/sounds/ai-{}.wav", home, event_type),
+            format!("{}/.config/omarchy/sounds/ai-{}.oga", home, event_type),
+            format!("{}/.config/acpd/sounds/{}.wav", home, event_type),
+            format!("{}/.config/omarchy/sounds/ai-response.wav", home),
+        ];
+
+        for path in &direct_files {
+            if std::path::Path::new(path).is_file() {
+                return Some(path.clone());
+            }
+        }
+
+        // 3. Check explicit config from toml
+        if let Some(sound_cfg) = &self.config {
+            let custom_path = match event_type {
+                "response" => sound_cfg.response.as_deref(),
+                "question" => sound_cfg.question.as_deref().or(sound_cfg.response.as_deref()),
+                "permission" => sound_cfg.permission.as_deref().or(sound_cfg.response.as_deref()),
+                "error" => sound_cfg.error.as_deref(),
+                _ => None,
+            };
+
+            if let Some(p) = custom_path {
+                let expanded = Self::expand_home(p);
+                if std::path::Path::new(&expanded).is_file() {
+                    return Some(expanded);
+                }
+            }
+        }
+
+        // 4. Fallback defaults
+        let fallbacks = [
+            format!("{}/.local/share/sounds/ai/01-crystal-chime.wav", home),
+            "/usr/share/sounds/freedesktop/stereo/complete.oga".to_string(),
+            "/usr/share/sounds/freedesktop/stereo/message.oga".to_string(),
+            "/usr/share/sounds/freedesktop/stereo/bell.oga".to_string(),
+        ];
+
+        for fb in &fallbacks {
+            if std::path::Path::new(fb).is_file() {
+                return Some(fb.clone());
+            }
+        }
+
+        None
+    }
+
+    fn play(&self, event_type: &'static str) {
+        if let Some(cfg) = &self.config {
+            if !cfg.enabled {
+                return;
+            }
+        }
+
+        let sound_path = match self.resolve_sound_path(event_type) {
+            Some(p) => p,
+            None => {
+                tracing::warn!("SoundAdapter: No sound file resolved for event '{}'", event_type);
+                return;
+            }
+        };
+
+        let player = self
+            .config
+            .as_ref()
+            .and_then(|c| c.player.clone())
+            .unwrap_or_else(|| "pw-play".to_string());
+
+        tokio::spawn(async move {
+            tracing::info!(
+                "SoundAdapter: Playing {} sound from '{}' via {}",
+                event_type,
+                sound_path,
+                player
+            );
+            let result = Command::new(&player)
+                .arg(&sound_path)
+                .output()
+                .await;
+
+            if let Err(e) = result {
+                tracing::warn!("SoundAdapter: Failed to execute player '{}': {}", player, e);
+                if player == "pw-play" {
+                    let _ = Command::new("paplay").arg(&sound_path).output().await;
+                }
+            }
+        });
+    }
+}
+
+#[async_trait]
+impl OutputAdapter for SoundAdapter {
+    async fn update(&self, update: &AgentUpdate) -> anyhow::Result<()> {
+        let prev_state = {
+            let mut states = self.pane_states.lock().await;
+            let prev = states.get(&update.pane_id).cloned();
+            if update.state == AgentState::Closed {
+                states.remove(&update.pane_id);
+            } else {
+                states.insert(update.pane_id.clone(), update.state.clone());
+            }
+            prev
+        };
+
+        match (&prev_state, &update.state) {
+            // When agent transitions from Working (or active state) to Idle -> AI response finished!
+            (Some(AgentState::Working), AgentState::Idle)
+            | (Some(AgentState::AwaitingInput), AgentState::Idle)
+            | (Some(AgentState::Permission), AgentState::Idle) => {
+                self.play("response");
+            }
+            // When agent transitions to AwaitingInput -> AI asking question / input
+            (_, AgentState::AwaitingInput) if prev_state != Some(AgentState::AwaitingInput) => {
+                self.play("question");
+            }
+            // When agent transitions to Permission -> AI asking permission
+            (_, AgentState::Permission) if prev_state != Some(AgentState::Permission) => {
+                self.play("permission");
+            }
+            // When agent transitions to Error
+            (_, AgentState::Error) if prev_state != Some(AgentState::Error) => {
+                self.play("error");
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -553,5 +733,49 @@ mod tests {
         };
         assert!(adapter.update(&update_working).await.is_ok());
         adapter.stop_spinner("%1").await;
+    }
+
+    #[tokio::test]
+    async fn test_sound_adapter_updates() {
+        let sound_cfg = SoundConfig {
+            enabled: false, // Disabled in test so no actual audio process runs
+            player: Some("true".to_string()),
+            response: Some("/dev/null".to_string()),
+            question: Some("/dev/null".to_string()),
+            permission: Some("/dev/null".to_string()),
+            error: Some("/dev/null".to_string()),
+        };
+        let adapter = SoundAdapter::new(Some(sound_cfg));
+
+        let update_working = AgentUpdate {
+            pane_id: "%1".to_string(),
+            state: AgentState::Working,
+            message: None,
+        };
+        assert!(adapter.update(&update_working).await.is_ok());
+
+        // Working -> Idle (should trigger response sound logic)
+        let update_idle = AgentUpdate {
+            pane_id: "%1".to_string(),
+            state: AgentState::Idle,
+            message: None,
+        };
+        assert!(adapter.update(&update_idle).await.is_ok());
+
+        // Question
+        let update_question = AgentUpdate {
+            pane_id: "%1".to_string(),
+            state: AgentState::AwaitingInput,
+            message: None,
+        };
+        assert!(adapter.update(&update_question).await.is_ok());
+
+        // Closed
+        let update_closed = AgentUpdate {
+            pane_id: "%1".to_string(),
+            state: AgentState::Closed,
+            message: None,
+        };
+        assert!(adapter.update(&update_closed).await.is_ok());
     }
 }

@@ -21,6 +21,21 @@ pub struct ThemeConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+pub struct SoundConfig {
+    #[serde(default = "default_sound_enabled")]
+    pub enabled: bool,
+    pub player: Option<String>,
+    pub response: Option<String>,
+    pub question: Option<String>,
+    pub permission: Option<String>,
+    pub error: Option<String>,
+}
+
+fn default_sound_enabled() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize, Clone)]
 #[allow(dead_code)]
 pub struct Config {
     #[serde(default = "default_listen_addr")]
@@ -33,6 +48,7 @@ pub struct Config {
     pub idle_debounce_ms: Option<u64>,
     pub theme: Option<ThemeConfig>,
     pub spinners: Option<HashMap<String, Spinner>>,
+    pub sound: Option<SoundConfig>,
 }
 
 fn default_listen_addr() -> String {

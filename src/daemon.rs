@@ -1,4 +1,4 @@
-use crate::adapters::{TmuxAdapter, WaybarAdapter};
+use crate::adapters::{SoundAdapter, TmuxAdapter, WaybarAdapter};
 use crate::api::api_router;
 use crate::config::Config;
 use crate::health::health_router;
@@ -37,6 +37,7 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
         vec![
             Box::new(TmuxAdapter::new(config.theme.clone(), active_spinner)),
             Box::new(WaybarAdapter::new(config.theme.clone())),
+            Box::new(SoundAdapter::new(config.sound.clone())),
         ],
         config.idle_debounce_ms.unwrap_or(650),
     );
