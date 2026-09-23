@@ -370,10 +370,10 @@ impl OutputAdapter for TmuxAdapter {
                 // Check deduplication
                 {
                     let mut states = pane_states.lock().await;
-                    if let Some(prev) = states.get(&pane_id) {
-                        if prev == &AgentState::Idle {
-                            return;
-                        }
+                    if let Some(prev) = states.get(&pane_id)
+                        && prev == &AgentState::Idle
+                    {
+                        return;
                     }
                     states.insert(pane_id.clone(), AgentState::Idle);
                 }
@@ -403,17 +403,20 @@ impl OutputAdapter for TmuxAdapter {
                 tracing::info!("TmuxAdapter: Debounced update pane {} to Idle", pane_id);
             });
 
-            self.pending_idles.lock().await.insert(update.pane_id.clone(), task);
+            self.pending_idles
+                .lock()
+                .await
+                .insert(update.pane_id.clone(), task);
             return Ok(());
         }
 
         // State deduplication: ignore redundant updates for the same state on the same pane
         {
             let mut states = self.pane_states.lock().await;
-            if let Some(prev) = states.get(&update.pane_id) {
-                if prev == &update.state {
-                    return Ok(());
-                }
+            if let Some(prev) = states.get(&update.pane_id)
+                && prev == &update.state
+            {
+                return Ok(());
             }
             if update.state == AgentState::Closed {
                 states.remove(&update.pane_id);
@@ -517,16 +520,16 @@ impl SoundAdapter {
     }
 
     fn expand_home(path: &str) -> String {
-        if path.starts_with("~/") {
-            if let Ok(home) = std::env::var("HOME") {
-                return format!("{}{}", home, &path[1..]);
-            }
+        if path.starts_with("~/")
+            && let Ok(home) = std::env::var("HOME")
+        {
+            return format!("{}{}", home, &path[1..]);
         }
         path.to_string()
     }
 
     fn resolve_sound_path(&self, event_type: &str) -> Option<String> {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/fecavmi".to_string());
+        let home = std::env::var("HOME").ok()?;
 
         // Check explicit mute marker files
         let mute_markers = [
@@ -585,8 +588,14 @@ impl SoundAdapter {
         if let Some(sound_cfg) = &self.config {
             let custom_path = match event_type {
                 "response" => sound_cfg.response.as_deref(),
-                "question" => sound_cfg.question.as_deref().or(sound_cfg.response.as_deref()),
-                "permission" => sound_cfg.permission.as_deref().or(sound_cfg.response.as_deref()),
+                "question" => sound_cfg
+                    .question
+                    .as_deref()
+                    .or(sound_cfg.response.as_deref()),
+                "permission" => sound_cfg
+                    .permission
+                    .as_deref()
+                    .or(sound_cfg.response.as_deref()),
                 "error" => sound_cfg.error.as_deref(),
                 _ => None,
             };
@@ -617,16 +626,19 @@ impl SoundAdapter {
     }
 
     fn play(&self, event_type: &'static str) {
-        if let Some(cfg) = &self.config {
-            if !cfg.enabled {
-                return;
-            }
+        if let Some(cfg) = &self.config
+            && !cfg.enabled
+        {
+            return;
         }
 
         let sound_path = match self.resolve_sound_path(event_type) {
             Some(p) => p,
             None => {
-                tracing::warn!("SoundAdapter: No sound file resolved for event '{}'", event_type);
+                tracing::warn!(
+                    "SoundAdapter: No sound file resolved for event '{}'",
+                    event_type
+                );
                 return;
             }
         };
@@ -644,10 +656,7 @@ impl SoundAdapter {
                 sound_path,
                 player
             );
-            let result = Command::new(&player)
-                .arg(&sound_path)
-                .output()
-                .await;
+            let result = Command::new(&player).arg(&sound_path).output().await;
 
             if let Err(e) = result {
                 tracing::warn!("SoundAdapter: Failed to execute player '{}': {}", player, e);

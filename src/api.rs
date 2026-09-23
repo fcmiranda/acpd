@@ -1003,15 +1003,18 @@ mod tests {
         assert_eq!(send_params.keys, vec!["ls -la", "Enter"]);
 
         let select_win_json = serde_json::json!({ "target": "@1" });
-        let select_win_params: SelectWindowParams = serde_json::from_value(select_win_json).unwrap();
+        let select_win_params: SelectWindowParams =
+            serde_json::from_value(select_win_json).unwrap();
         assert_eq!(select_win_params.target, Some("@1".into()));
 
         let select_pane_json = serde_json::json!({ "target": "%1" });
-        let select_pane_params: SelectPaneParams = serde_json::from_value(select_pane_json).unwrap();
+        let select_pane_params: SelectPaneParams =
+            serde_json::from_value(select_pane_json).unwrap();
         assert_eq!(select_pane_params.target, Some("%1".into()));
 
         let display_msg_json = serde_json::json!({ "message": "Hello", "target": "@0" });
-        let display_msg_params: DisplayMessageParams = serde_json::from_value(display_msg_json).unwrap();
+        let display_msg_params: DisplayMessageParams =
+            serde_json::from_value(display_msg_json).unwrap();
         assert_eq!(display_msg_params.message, "Hello");
         assert_eq!(display_msg_params.target, Some("@0".into()));
 
